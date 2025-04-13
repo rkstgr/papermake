@@ -7,3 +7,9 @@ edition = "2021"
 papermake = { path = "../papermake" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8.3"
+tower-http = { version = "0.6", features = ["trace", "cors"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
