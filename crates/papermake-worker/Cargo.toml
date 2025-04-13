@@ -1,0 +1,9 @@
+[package]
+name = "papermake-worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+papermake = { path = "../papermake" }
+tokio = { version = "1", features = ["full"] }
+redis = { version = "0.23", features = ["tokio-comp"] }

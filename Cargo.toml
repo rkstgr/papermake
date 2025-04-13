@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "crates/papermake",
+    "crates/papermake-server",
+    "crates/papermake-worker",
+]

@@ -1,0 +1,9 @@
+[package]
+name = "papermake-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+papermake = { path = "../papermake" }
+tokio = { version = "1", features = ["full"] }
+axum = "0.8.3"
