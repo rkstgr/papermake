@@ -1,4 +1,8 @@
 //! Storage abstraction for templates
+//! 
+mod file;
+
+pub use file::FileStorage;
 
 use async_trait::async_trait;
 use crate::error::Result;
@@ -18,6 +22,15 @@ pub trait Storage: Send + Sync + 'static {
     
     /// Delete a template
     async fn delete_template(&self, id: &TemplateId) -> Result<()>;
+    
+    /// Save an additional file associated with a template
+    async fn save_template_file(&self, template_id: &TemplateId, path: &str, content: &[u8]) -> Result<()>;
+    
+    /// Get a file associated with a template
+    async fn get_template_file(&self, template_id: &TemplateId, path: &str) -> Result<Vec<u8>>;
+    
+    /// List all files associated with a template
+    async fn list_template_files(&self, template_id: &TemplateId) -> Result<Vec<String>>;
 }
 
 // A concrete implementation would be provided elsewhere,
