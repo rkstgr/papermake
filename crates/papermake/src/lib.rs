@@ -1,12 +1,12 @@
 //! Papermake is a PDF generation library that uses Typst templates
 //! with associated schemas to render PDFs from structured data.
 
-mod error;
-mod schema;
-mod template;
-mod render;
-mod storage;
-mod typst;
+pub mod error;
+pub mod schema;
+pub mod template;
+pub mod render;
+pub mod storage;
+pub mod typst;
 // Re-export core types
 pub use error::{PapermakeError, Result};
 pub use schema::{Schema, SchemaField, FieldType};
