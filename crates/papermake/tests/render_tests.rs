@@ -17,7 +17,7 @@ fn test_render_pdf() {
     let template = Template::new(
         "test",
         "Test Template",
-        "Hello #name!",
+        "#let data = json.decode(sys.inputs.data)\nHello #data.name!",
         schema,
     );
     
@@ -32,4 +32,9 @@ fn test_render_pdf() {
     
     let pdf_bytes = result.unwrap();
     assert!(!pdf_bytes.is_empty());
+
+    // Save to file
+    let file_path = "test_output.pdf";
+    std::fs::write(file_path, &pdf_bytes).unwrap();
+    println!("PDF saved to {}", file_path);
 }

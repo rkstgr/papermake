@@ -6,7 +6,7 @@ mod schema;
 mod template;
 mod render;
 mod storage;
-
+mod typst;
 // Re-export core types
 pub use error::{PapermakeError, Result};
 pub use schema::{Schema, SchemaField, FieldType};

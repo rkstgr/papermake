@@ -10,3 +10,7 @@ target/
 *.pdb
 
 .idea/
+
+.env*
+
+fonts/

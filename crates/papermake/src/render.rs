@@ -1,7 +1,11 @@
 //! PDF rendering functionality
 
+use typst_pdf::PdfOptions;
+
 use crate::error::Result;
 use crate::template::Template;
+use crate::typst::TypstWorld;
+use crate::PapermakeError;
 
 /// Options for PDF rendering
 #[derive(Debug, Clone)]
@@ -26,24 +30,23 @@ impl Default for RenderOptions {
 pub fn render_pdf(
     template: &Template,
     data: &serde_json::Value,
-    options: Option<RenderOptions>,
+    _options: Option<RenderOptions>,
 ) -> Result<Vec<u8>> {
     // Validate data against schema
     template.validate_data(data)?;
     
-    let options = options.unwrap_or_default();
-    
-    // This is a placeholder implementation
-    // In a real implementation, you'd use a Typst rendering library
-    
-    // For now, just return a dummy PDF (obviously not a real PDF)
-    let content = format!(
-        "Template: {}\nData: {}\nOptions: {:?}",
-        template.id.0,
-        data,
-        options
+    let world = TypstWorld::new(
+        template.content.clone(),
+        serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
     );
+
+    let document = typst::compile(&world)
+        .output
+        .map_err(|e| PapermakeError::Rendering(format!("compile error: {:?}", e)))?;
+
+    
+    let pdf_bytes = typst_pdf::pdf(&document, &PdfOptions::default()).unwrap();
     
     // Return content as bytes
-    Ok(content.into_bytes())
+    Ok(pdf_bytes)
 }
