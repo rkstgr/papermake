@@ -6,18 +6,17 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{get, post, delete},
+    routing::{get, post},
     Json, Router,
 };
+use base64::{prelude::BASE64_STANDARD, Engine};
 use papermake::{
-    storage::{FileStorage, Storage},
-    template::{Template, TemplateId},
-    render::{render_pdf, RenderOptions},
-    error::PapermakeError,
+    error::PapermakeError, render::{render_pdf, RenderError, RenderOptions}, storage::{FileStorage, Storage}, template::{Template, TemplateId}
 };
 use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;
 use tower_http::cors::CorsLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 // Application state with shared storage
 struct AppState {
@@ -55,10 +54,17 @@ struct RenderOptionsRequest {
 }
 
 #[derive(Serialize)]
+struct RenderResultResponse {
+    pdf_base64: Option<String>,
+    errors: Vec<RenderError>,
+}
+
+#[derive(Serialize)]
 struct TemplateResponse {
     id: String,
     name: String,
     schema: papermake::schema::Schema,
+    content: String,
     description: Option<String>,
     created_at: String,
     updated_at: String,
@@ -70,6 +76,7 @@ impl From<Template> for TemplateResponse {
             id: template.id.0,
             name: template.name,
             schema: template.schema,
+            content: template.content,
             description: template.description,
             created_at: template.created_at.to_string(),
             updated_at: template.updated_at.to_string(),
@@ -104,9 +111,15 @@ impl IntoResponse for AppError {
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
-
+    // Initialize tracing with more detailed configuration
+    tracing_subscriber::registry()
+        .with(EnvFilter::new(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "papermake_server=debug,tower_http=debug".into())
+        ))
+        .with(tracing_subscriber::fmt::layer())
+        .try_init()
+        .unwrap();
     // Initialize storage
     let storage_path = std::env::var("PAPERMAKE_STORAGE_PATH")
         .unwrap_or_else(|_| "./data".to_string());
@@ -129,7 +142,24 @@ async fn main() {
             .put(save_template_file)
             .delete(delete_template_file))
         .route("/health", get(health_check))
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::http::Request<_>| {
+                    tracing::debug_span!(
+                        "http_request",
+                        method = %request.method(),
+                        uri = %request.uri(),
+                        version = ?request.version(),
+                    )
+                })
+                .on_request(|request: &axum::http::Request<_>, _span: &tracing::Span| {
+                    tracing::debug!("started {} {}", request.method(), request.uri());
+                })
+                .on_response(|response: &axum::http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
+                    tracing::debug!("response generated in {:?}", latency);
+                    tracing::debug!("status: {}", response.status());
+                })
+        )
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -232,7 +262,7 @@ async fn render_template(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(payload): Json<RenderTemplateRequest>,
-) -> Result<Vec<u8>, AppError> {
+) -> Result<Json<RenderResultResponse>, AppError> {
     let template = state.storage.get_template(&TemplateId(id)).await
         .map_err(|_| AppError::NotFound)?;
     
@@ -247,10 +277,22 @@ async fn render_template(
         return Err(AppError::BadRequest(format!("Invalid data: {}", err)));
     }
     
-    // Render PDF
-    let pdf_bytes = render_pdf(&template, &payload.data, options)?;
+    // Render PDF and handle errors
+    let render_result = match render_pdf(&template, &payload.data, options) {
+        Ok(result) => result,
+        Err(e) => return Err(AppError::Papermake(e)),
+    };
+
+    // Convert PDF to base64 if present
+    let pdf_base64 = render_result.pdf
+        .as_ref()
+        .map(|pdf| BASE64_STANDARD.encode(pdf));
+
+    Ok(Json(RenderResultResponse {
+        pdf_base64,
+        errors: render_result.errors,
+    }))
     
-    Ok(pdf_bytes)
 }
 
 // Template file operations
