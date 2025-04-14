@@ -14,7 +14,7 @@ use typst::Library;
 pub struct TypstWorld {
 
     /// The content of a source.
-    source: Source,
+    pub source: Source,
 
     /// The standard library.
     library: LazyHash<Library>,

@@ -1,5 +1,8 @@
 //! PDF rendering functionality
 
+use serde::Serialize;
+use typst::WorldExt;
+use typst::World;
 use typst_pdf::PdfOptions;
 
 use crate::error::Result;
@@ -26,12 +29,29 @@ impl Default for RenderOptions {
     }
 }
 
+#[derive(Debug, Serialize)]
+pub struct RenderError {
+    pub message: String,
+    pub start: usize,
+    pub end: usize,
+    pub line: usize,
+    pub ch: usize,
+    pub end_line: Option<usize>,
+    pub end_ch: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct RenderResult {
+    pub pdf: Option<Vec<u8>>,
+    pub errors: Vec<RenderError>,
+}
+
 /// Render a template with data to a PDF
 pub fn render_pdf(
     template: &Template,
     data: &serde_json::Value,
     _options: Option<RenderOptions>,
-) -> Result<Vec<u8>> {
+) -> Result<RenderResult> {
     // Validate data against schema
     template.validate_data(data)?;
     
@@ -40,13 +60,39 @@ pub fn render_pdf(
         serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
     );
 
-    let document = typst::compile(&world)
-        .output
-        .map_err(|e| PapermakeError::Rendering(format!("compile error: {:?}", e)))?;
+    let compile_result = typst::compile(&world);
+    
+    let mut errors = Vec::new();
+    let mut pdf = None;
 
-    
-    let pdf_bytes = typst_pdf::pdf(&document, &PdfOptions::default()).unwrap();
-    
-    // Return content as bytes
-    Ok(pdf_bytes)
+    match compile_result.output {
+        Ok(document) => {
+            pdf = Some(typst_pdf::pdf(&document, &PdfOptions::default()).unwrap());
+        }
+        Err(diagnostics) => {
+            for diagnostic in diagnostics {
+                let span = diagnostic.span;
+                if let Some(id) = span.id() {
+                    if let Ok(file) = world.source(id) {
+                        if let Some(range) = world.range(span) {
+                            errors.push(RenderError {
+                                message: diagnostic.message.to_string(),
+                                start: range.start,
+                                end: range.end,
+                                line: file.byte_to_line(range.start).unwrap(),
+                                ch: file.byte_to_column(range.start).unwrap(),
+                                end_line: Some(file.byte_to_line(range.end).unwrap()),
+                                end_ch: Some(file.byte_to_column(range.end).unwrap()),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(RenderResult {
+        pdf,
+        errors,
+    })
 }
