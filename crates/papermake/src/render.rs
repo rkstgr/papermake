@@ -33,11 +33,7 @@ impl Default for RenderOptions {
 pub struct RenderError {
     pub message: String,
     pub start: usize,
-    pub end: usize,
-    pub line: usize,
-    pub ch: usize,
-    pub end_line: Option<usize>,
-    pub end_ch: Option<usize>,
+    pub end: usize
 }
 
 #[derive(Debug, Serialize)]
@@ -78,12 +74,7 @@ pub fn render_pdf(
                             errors.push(RenderError {
                                 message: diagnostic.message.to_string(),
                                 start: range.start,
-                                end: range.end,
-                                line: file.byte_to_line(range.start).unwrap(),
-                                ch: file.byte_to_column(range.start).unwrap(),
-                                end_line: Some(file.byte_to_line(range.end).unwrap()),
-                                end_ch: Some(file.byte_to_column(range.end).unwrap()),
-                            });
+                                end: range.end,});
                         }
                     }
                 }
