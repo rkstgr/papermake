@@ -256,7 +256,8 @@ mod tests {
         // Create a simple schema
         let mut schema = Schema::new();
         schema.add_field(SchemaField {
-            name: "name".to_string(),
+            key: "name".to_string(),
+            label: Some("Name".to_string()),
             field_type: FieldType::String,
             required: true,
             description: None,

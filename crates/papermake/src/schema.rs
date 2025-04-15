@@ -19,7 +19,8 @@ pub enum FieldType {
 /// A field in a schema with metadata
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SchemaField {
-    pub name: String,
+    pub key: String,
+    pub label: Option<String>,
     pub field_type: FieldType,
     pub required: bool,
     pub description: Option<String>,
@@ -56,14 +57,14 @@ impl Schema {
         let data_obj = data.as_object().unwrap();
         
         for field in &self.fields {
-            if field.required && !data_obj.contains_key(&field.name) {
+            if field.required && !data_obj.contains_key(&field.key) {
                 return Err(PapermakeError::SchemaValidation(
-                    format!("Required field '{}' is missing", field.name)
+                    format!("Required field '{}' is missing", field.key)
                 ));
             }
             
-            if let Some(value) = data_obj.get(&field.name) {
-                self.validate_field_type(&field.field_type, value, &field.name)?;
+            if let Some(value) = data_obj.get(&field.key) {
+                self.validate_field_type(&field.field_type, value, &field.key)?;
             }
         }
         

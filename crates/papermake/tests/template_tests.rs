@@ -6,13 +6,15 @@ fn test_template_schema_validation() {
     // Create a simple schema
     let mut schema = Schema::new();
     schema.add_field(SchemaField {
-        name: "name".to_string(),
+        key: "name".to_string(),
+        label: Some("Name".to_string()),
         field_type: FieldType::String,
         required: true,
         description: Some("Customer name".to_string()),
         default: None,
     }).add_field(SchemaField {
-        name: "age".to_string(),
+        key: "age".to_string(),
+        label: Some("Age".to_string()),
         field_type: FieldType::Number,
         required: false,
         description: Some("Customer age".to_string()),
