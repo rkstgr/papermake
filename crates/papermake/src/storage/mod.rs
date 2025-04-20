@@ -1,7 +1,9 @@
 //! Storage abstraction for templates
 //! 
-mod file;
 
+#[cfg(feature = "fs")]
+mod file;
+#[cfg(feature = "fs")]
 pub use file::FileStorage;
 
 use async_trait::async_trait;
@@ -10,7 +12,7 @@ use crate::template::{Template, TemplateId};
 
 /// Storage trait for template persistence
 #[async_trait]
-pub trait Storage: Send + Sync + 'static {
+pub trait Storage: 'static + Sync + Send {
     /// Save a template
     async fn save_template(&self, template: &Template) -> Result<()>;
     

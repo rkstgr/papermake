@@ -6,14 +6,17 @@ Papermake is a fast & ergonomic PDF generation library, built in Rust. The core 
 
 Papermake was born from experiences in finance where existing PDF generation tools couldn't meet the demands of high-volume, low-latency document processing at scale. Legacy tools like Crystal Reports have legacy dependencies, are difficult to version control, and lacked proper testing capabilities. Papermake solves these challenges by providing a fast, cloud-ready PDF generator with a focus on ergonomics, testability, and debuggability - all while remaining platform-independent.
 
-## Features
+⚠️ **Please Note:** This project is in its early stages of development. Features, APIs, and documentation are subject to change.
 
--   ⚡️ **High Performance**: Built with Rust for optimal performance
--   📝 **Typst Template Support**: Use Typst's powerful markup language for document templates
--   🔍 **Schema Validation**: Define and validate input data structure using JSON schemas
--   🚀 **HTTP API**: Ready-to-use server with RESTful endpoints
--   📦 **File Management**: Built-in template and asset management
--   🔒 **Type Safety**: Strong typing and validation throughout the pipeline
+## Roadmap & Key Features
+
+Papermake aims to provide the following core capabilities:
+
+-   🚀 **High Performance & Scalability**: Built with Rust and leveraging Typst for high-throughput, low-latency PDF generation suitable for demanding applications.
+-   🔗 **Seamless Data Integration**: Easily bind JSON data to your Typst templates.
+-   ✅ **Schema-Driven Data Validation**: Define and enforce input data structures using JSON schemas, ensuring data integrity before rendering.
+-   🏛️ **Robust Template Management**: Features designed to support template versioning, auditing, and compliance needs, crucial for managed documents like certificates or reports.
+-   💡 **Enhanced Debuggability**: Focused on providing clear feedback and tools to simplify the process of developing and troubleshooting templates.
 
 ## Quick Start
 

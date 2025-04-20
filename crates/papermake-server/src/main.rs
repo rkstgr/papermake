@@ -123,7 +123,7 @@ async fn main() {
     // Initialize storage
     let storage_path = std::env::var("PAPERMAKE_STORAGE_PATH")
         .unwrap_or_else(|_| "./data".to_string());
-    let storage = Arc::new(FileStorage::new(PathBuf::from(storage_path))) as Arc<dyn Storage>;
+    let storage = Arc::new(FileStorage::new(PathBuf::from(storage_path)));
 
     // Create app state
     let state = Arc::new(AppState { storage });

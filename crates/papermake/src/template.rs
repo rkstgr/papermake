@@ -80,16 +80,11 @@ impl Template {
         self.schema.validate(data)
     }
     
-    /// Parse a template from a file
-    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
-        let content = std::fs::read_to_string(path.as_ref())
-            .map_err(|e| PapermakeError::Io(e))?;
-            
+    pub fn from_file_content(id: impl Into<TemplateId>, content: &str) -> Result<Self> {
         // This is a simplified implementation
         // In a real implementation, you'd parse frontmatter for metadata
         // and extract the schema definition
-        
-        // For now, just extract content after "---" markers
+
         let parts: Vec<&str> = content.split("---").collect();
         if parts.len() < 3 {
             return Err(PapermakeError::Template(
@@ -105,13 +100,23 @@ impl Template {
         let schema = Schema::default();
         
         Ok(Template {
-            id: TemplateId(path.as_ref().file_stem().unwrap().to_string_lossy().to_string()),
-            name: path.as_ref().file_stem().unwrap().to_string_lossy().to_string(),
+            id: id.into(),
+            name: "".to_string(), // TODO: extract from frontmatter
             content: template_content,
             schema,
             description: None,
             created_at: time::OffsetDateTime::now_utc(),
             updated_at: time::OffsetDateTime::now_utc(),
         })
+    }
+    
+
+    /// Parse a template from a file
+    pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
+        let content = std::fs::read_to_string(path.as_ref())
+            .map_err(|e| PapermakeError::Io(e))?;
+        
+        let id = path.as_ref().file_stem().unwrap().to_string_lossy().to_string();
+        Self::from_file_content(id, &content)
     }
 }

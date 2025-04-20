@@ -12,6 +12,7 @@ use typst::Library;
 use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
 
 /// Main interface that determines the environment for Typst.
+#[derive(Debug)]
 pub struct TypstWorld {
     /// The content of a source.
     pub source: Source,
@@ -30,9 +31,6 @@ pub struct TypstWorld {
 
     /// Cache directory (e.g. where packages are downloaded to).
     cache_directory: PathBuf,
-
-    /// http agent to download packages.
-    http: ureq::Agent,
 
     /// Datetime.
     time: time::OffsetDateTime,
@@ -56,9 +54,21 @@ impl TypstWorld {
             cache_directory: std::env::var_os("CACHE_DIRECTORY")
                 .map(|os_path| os_path.into())
                 .unwrap_or(std::env::temp_dir()),
-            http: ureq::agent(),
             files: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    pub fn update_data(&mut self, data: String) -> Result<(), String> {
+        // Update the data in the inputs dictionary
+        let mut inputs_dict = Dict::new();
+        inputs_dict.insert("data".into(), data.as_str().into_value());
+        
+        // Create a new library with updated inputs
+        // Note: This is not optimal - ideally we'd modify the existing library
+        let library = Library::builder().with_inputs(inputs_dict).build();
+        self.library = LazyHash::new(library);
+        
+        Ok(())
     }
 }
 
@@ -105,52 +115,6 @@ impl TypstWorld {
         Err(FileError::AccessDenied)
     }
 
-    /// Downloads the package and returns the system path of the unpacked package.
-    fn download_package(&self, package: &PackageSpec) -> PackageResult<PathBuf> {
-        let package_subdir = format!("{}/{}/{}", package.namespace, package.name, package.version);
-        let path = self.cache_directory.join(package_subdir);
-
-        if path.exists() {
-            return Ok(path);
-        }
-
-        eprintln!("downloading {package}");
-        let url = format!(
-            "https://packages.typst.org/{}/{}-{}.tar.gz",
-            package.namespace, package.name, package.version,
-        );
-
-        let response = retry(|| {
-            let response = self
-                .http
-                .get(&url)
-                .call()
-                .map_err(|error| eco_format!("{error}"))?;
-
-            let status = response.status().into();
-            if !http_successful(status) {
-                return Err(eco_format!(
-                    "response returned unsuccessful status code {status}",
-                ));
-            }
-
-            Ok(response)
-        })
-        .map_err(|error| PackageError::NetworkFailed(Some(error)))?;
-
-        let mut compressed_archive = Vec::new();
-        let body = response.into_body();
-        std::io::Read::read_to_end(&mut body.into_reader(), &mut compressed_archive)
-            .map_err(|error| PackageError::NetworkFailed(Some(eco_format!("{error}"))))?;
-        let raw_archive = flate2::read::GzDecoder::new(&compressed_archive[..]);
-        let mut archive = tar::Archive::new(raw_archive);
-        archive.unpack(&path).map_err(|error| {
-            _ = std::fs::remove_dir_all(&path);
-            PackageError::MalformedArchive(Some(eco_format!("{error}")))
-        })?;
-
-        Ok(path)
-    }
 }
 
 /// This is the interface we have to implement such that `typst` can compile it.

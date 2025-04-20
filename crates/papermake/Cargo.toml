@@ -9,11 +9,10 @@ serde_json = "1.0"
 thiserror = "2.0"
 time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
 async-trait = "0.1"
-tokio = { version = "1.44", features = ["fs", "sync"] }
-
+tokio = { version = "1.44", features = ["fs", "sync"], optional = true}
 # Typst
 typst = "0.13"
-typst-kit = "0.13"
+typst-kit = {version="0.13", default-features = false, features = ["fonts"] }
 typst-library = "0.13"
 typst-pdf = "0.13"
 zune-inflate = { version = "0.2", default-features = false, features = [
@@ -21,7 +20,6 @@ zune-inflate = { version = "0.2", default-features = false, features = [
     "std",
 ] }
 tar = "0.4"
-ureq = "3.0"
 flate2 = "1.1"
 ttf-parser = "0.25"
 
@@ -29,3 +27,9 @@ ttf-parser = "0.25"
 tempfile = "3.19"
 tokio = { version = "1.44", features = ["full"] }
 pdf = "0.9.0"
+
+
+[features]
+fs = ["tokio"]
+
+default = ["fs"]

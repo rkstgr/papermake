@@ -87,3 +87,61 @@ pub fn render_pdf(
         errors,
     })
 }
+
+pub fn render_pdf_with_cache(
+    template: &Template,
+    data: &serde_json::Value,
+    world_cache: Option<&mut TypstWorld>, // Add a cache parameter
+    _options: Option<RenderOptions>,
+) -> Result<RenderResult> {
+    // Validate data against schema
+    template.validate_data(data)?;
+    
+    // Either use the cached world or create a new one
+    let world = match world_cache {
+        Some(cached_world) => {
+            // Update the inputs in the existing world
+            cached_world.update_data(
+                serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
+            ).map_err(|e| PapermakeError::Rendering(e.to_string()))?;
+            // Make sure to reset tracking state
+            // cached_world.reset(); TODO: Implement this
+            cached_world
+        }
+        None => &mut TypstWorld::new(
+            template.content.clone(),
+            serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
+        ),
+    };
+
+    let compile_result = typst::compile(world as &dyn World);
+
+    let mut errors = Vec::new();
+    let mut pdf = None;
+
+    match compile_result.output {
+        Ok(document) => {
+            pdf = Some(typst_pdf::pdf(&document, &PdfOptions::default()).unwrap());
+        }
+        Err(diagnostics) => {
+            for diagnostic in diagnostics {
+                let span = diagnostic.span;
+                if let Some(id) = span.id() {
+                    if let Ok(_file) = world.source(id) {
+                        if let Some(range) = world.range(span) {
+                            errors.push(RenderError {
+                                message: diagnostic.message.to_string(),
+                                start: range.start,
+                                end: range.end,});
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(RenderResult {
+        pdf,
+        errors,
+    })
+}
