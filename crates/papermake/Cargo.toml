@@ -13,6 +13,7 @@ tokio = { version = "1.44", features = ["fs", "sync"] }
 
 # Typst
 typst = "0.13"
+typst-kit = "0.13"
 typst-library = "0.13"
 typst-pdf = "0.13"
 zune-inflate = { version = "0.2", default-features = false, features = [
