@@ -9,7 +9,7 @@ use typst::syntax::{FileId, Source};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::Library;
-use typst_kit::fonts::{FontSearcher, FontSlot};
+use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
 
 /// Main interface that determines the environment for Typst.
 pub struct TypstWorld {
@@ -221,7 +221,7 @@ fn find_fonts() -> (FontBook, Vec<Font>) {
         }
     };
 
-    let book = fonts.book.clone();
+    let book = fonts.book;
     let fonts = fonts
         .fonts
         .iter()
@@ -230,25 +230,6 @@ fn find_fonts() -> (FontBook, Vec<Font>) {
         .collect::<Vec<_>>();
 
     (book, fonts)
-}
-
-/// Helper function
-fn fonts(fonts_dir: &Path) -> Vec<Font> {
-    std::fs::read_dir(fonts_dir)
-        .expect("Could not read fonts from disk")
-        .map(Result::unwrap)
-        .flat_map(|entry| {
-            let path = entry.path();
-            let bytes = std::fs::read(&path).unwrap();
-            let buffer = Bytes::new(bytes);
-            let face_count = ttf_parser::fonts_in_collection(&buffer).unwrap_or(1);
-            (0..face_count).map(move |face| {
-                Font::new(buffer.clone(), face).unwrap_or_else(|| {
-                    panic!("failed to load font from {path:?} (face index {face})")
-                })
-            })
-        })
-        .collect()
 }
 
 fn retry<T, E>(mut f: impl FnMut() -> Result<T, E>) -> Result<T, E> {
