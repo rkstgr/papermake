@@ -9,10 +9,10 @@ use typst::syntax::{FileId, Source};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::Library;
+use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
 
 /// Main interface that determines the environment for Typst.
 pub struct TypstWorld {
-
     /// The content of a source.
     pub source: Source,
 
@@ -40,8 +40,7 @@ pub struct TypstWorld {
 
 impl TypstWorld {
     pub fn new(template_content: String, data: String) -> Self {
-        let fonts_dir = std::env::var_os("FONTS_DIR").unwrap_or_default();
-        let fonts = fonts(&PathBuf::from(fonts_dir));
+        let (book, fonts) = find_fonts();
 
         let mut inputs_dict = Dict::new();
         inputs_dict.insert("data".into(), data.as_str().into_value());
@@ -50,7 +49,7 @@ impl TypstWorld {
 
         Self {
             library: LazyHash::new(library),
-            book: LazyHash::new(FontBook::from_fonts(&fonts)),
+            book: LazyHash::new(book),
             fonts,
             source: Source::detached(template_content),
             time: time::OffsetDateTime::now_utc(),
@@ -203,23 +202,34 @@ impl typst::World for TypstWorld {
     }
 }
 
-/// Helper function
-fn fonts(fonts_dir: &Path) -> Vec<Font> {
-    std::fs::read_dir(fonts_dir)
-        .expect("Could not read fonts from disk")
-        .map(Result::unwrap)
-        .flat_map(|entry| {
-            let path = entry.path();
-            let bytes = std::fs::read(&path).unwrap();
-            let buffer = Bytes::new(bytes);
-            let face_count = ttf_parser::fonts_in_collection(&buffer).unwrap_or(1);
-            (0..face_count).map(move |face| {
-                Font::new(buffer.clone(), face).unwrap_or_else(|| {
-                    panic!("failed to load font from {path:?} (face index {face})")
-                })
-            })
-        })
-        .collect()
+/// Helper function to find all fonts on the system.
+/// 
+/// If `FONTS_DIR` is set, it will search in that directory as well as system fonts.
+/// 
+/// If `FONTS_DIR` is not set, it will only search for system fonts.
+fn find_fonts() -> (FontBook, Vec<Font>) {
+    let mut font_searcher = FontSearcher::new();
+    let font_searcher = font_searcher.include_system_fonts(true);
+    
+    let fonts = match std::env::var_os("FONTS_DIR") {
+        Some(fonts_dir) => {
+            let fonts_dir = PathBuf::from(fonts_dir);
+            font_searcher.search_with([&fonts_dir])
+        }
+        None => {
+            font_searcher.search()
+        }
+    };
+
+    let book = fonts.book;
+    let fonts = fonts
+        .fonts
+        .iter()
+        .map(FontSlot::get)
+        .filter_map(|f| f)
+        .collect::<Vec<_>>();
+
+    (book, fonts)
 }
 
 fn retry<T, E>(mut f: impl FnMut() -> Result<T, E>) -> Result<T, E> {
