@@ -95,7 +95,3 @@ For more detailed documentation and examples, please visit our documentation (co
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
