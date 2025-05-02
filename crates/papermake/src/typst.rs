@@ -1,15 +1,39 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use typst::diag::{eco_format, FileError, FileResult, PackageError, PackageResult};
+use once_cell::sync::Lazy;
+use typst::diag::{FileError, FileResult};
 use typst::foundations::{Bytes, Datetime, Dict, IntoValue};
-use typst::syntax::package::PackageSpec;
 use typst::syntax::{FileId, Source};
 use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::Library;
-use typst_kit::fonts::{FontSearcher, FontSlot, Fonts};
+use typst_kit::fonts::{FontSearcher, FontSlot};
+
+// Define a static lazy variable to hold the cached fonts
+static CACHED_FONTS: Lazy<(FontBook, Vec<Font>)> = Lazy::new(|| {
+    let mut font_searcher = FontSearcher::new();
+    let font_searcher = font_searcher.include_system_fonts(true);
+
+    let fonts = match std::env::var_os("FONTS_DIR") {
+        Some(fonts_dir) => {
+            let fonts_dir = PathBuf::from(fonts_dir);
+            font_searcher.search_with([&fonts_dir])
+        }
+        None => font_searcher.search(),
+    };
+
+    let book = fonts.book;
+    let fonts = fonts
+        .fonts
+        .iter()
+        .map(FontSlot::get)
+        .filter_map(|f| f)
+        .collect::<Vec<_>>();
+
+    (book, fonts)
+});
 
 /// Main interface that determines the environment for Typst.
 #[derive(Debug)]
@@ -38,7 +62,8 @@ pub struct TypstWorld {
 
 impl TypstWorld {
     pub fn new(template_content: String, data: String) -> Self {
-        let (book, fonts) = find_fonts();
+        // Use the cached fonts directly
+        let (book, fonts) = CACHED_FONTS.clone();
 
         let mut inputs_dict = Dict::new();
         inputs_dict.insert("data".into(), data.as_str().into_value());
@@ -48,7 +73,7 @@ impl TypstWorld {
         Self {
             library: LazyHash::new(library),
             book: LazyHash::new(book),
-            fonts,
+            fonts, // Use the cached fonts
             source: Source::detached(template_content),
             time: time::OffsetDateTime::now_utc(),
             cache_directory: std::env::var_os("CACHE_DIRECTORY")
@@ -164,47 +189,4 @@ impl typst::World for TypstWorld {
         let time = self.time.checked_to_offset(offset)?;
         Some(Datetime::Date(time.date()))
     }
-}
-
-/// Helper function to find all fonts on the system.
-/// 
-/// If `FONTS_DIR` is set, it will search in that directory as well as system fonts.
-/// 
-/// If `FONTS_DIR` is not set, it will only search for system fonts.
-fn find_fonts() -> (FontBook, Vec<Font>) {
-    let mut font_searcher = FontSearcher::new();
-    let font_searcher = font_searcher.include_system_fonts(true);
-    
-    let fonts = match std::env::var_os("FONTS_DIR") {
-        Some(fonts_dir) => {
-            let fonts_dir = PathBuf::from(fonts_dir);
-            font_searcher.search_with([&fonts_dir])
-        }
-        None => {
-            font_searcher.search()
-        }
-    };
-
-    let book = fonts.book;
-    let fonts = fonts
-        .fonts
-        .iter()
-        .map(FontSlot::get)
-        .filter_map(|f| f)
-        .collect::<Vec<_>>();
-
-    (book, fonts)
-}
-
-fn retry<T, E>(mut f: impl FnMut() -> Result<T, E>) -> Result<T, E> {
-    if let Ok(ok) = f() {
-        Ok(ok)
-    } else {
-        f()
-    }
-}
-
-fn http_successful(status: u16) -> bool {
-    // 2XX
-    status / 100 == 2
 }

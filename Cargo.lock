@@ -1632,6 +1632,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "flate2",
+ "once_cell",
  "pdf",
  "serde",
  "serde_json",
