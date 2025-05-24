@@ -8,15 +8,18 @@ Papermake was born from experiences in finance where existing PDF generation too
 
 ⚠️ **Please Note:** This project is in its early stages of development. Features, APIs, and documentation are subject to change.
 
-## Roadmap & Key Features
+## Key Features
 
-Papermake aims to provide the following core capabilities:
+-   **🚀 High Performance**: Built with Rust and Typst for fast, low-latency PDF generation. Automatic template compilation caching for high-volume document processing
+-   **🔧 Ergonomic API**: Builder patterns and fluent interfaces for ease of use, with seamless data binding from JSON
+-   **📐 Schema Validation**: Type-safe data binding with compile-time schema macros
 
--   🚀 **High Performance & Scalability**: Built with Rust and leveraging Typst for high-throughput, low-latency PDF generation suitable for demanding applications.
--   🔗 **Seamless Data Integration**: Easily bind JSON data to your Typst templates.
--   ✅ **Schema-Driven Data Validation**: Define and enforce input data structures using JSON schemas, ensuring data integrity before rendering.
--   🏛️ **Robust Template Management**: Features designed to support template versioning, auditing, and compliance needs, crucial for managed documents like certificates or reports.
--   💡 **Enhanced Debuggability**: Focused on providing clear feedback and tools to simplify the process of developing and troubleshooting templates.
+## Planned Features
+
+-   Template versioning and management system
+-   HTTP API server for microservice deployments
+-   Enhanced debugging and error reporting
+-   Additional output formats beyond PDF
 
 ## Quick Start
 
@@ -74,44 +77,6 @@ for customer in customers {
 
 // Clear cache if needed
 cached_template.clear_cache()?;
-```
-
-## Using the HTTP API
-
-The HTTP server provides RESTful endpoints for template management and rendering. Run the server with:
-
-```bash
-cargo run -p papermake-server
-```
-
-Here's an example using curl:
-
-```bash
-# Create a new template
-curl -X POST http://localhost:3000/templates \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Invoice",
-    "content": "#let data = json.decode(sys.inputs.data)\n= Invoice\nBill to: #data.name",
-    "schema": {
-      "fields": [
-        {
-          "key": "name",
-          "label": "Customer Name",
-          "field_type": "string",
-          "required": true
-        }
-      ]
-    }
-  }'
-
-# Render the template
-curl -X POST http://localhost:3000/templates/invoice/render \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "John Doe"
-  }' \
-  --output invoice.pdf
 ```
 
 ## Documentation

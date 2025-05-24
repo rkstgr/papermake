@@ -2,17 +2,31 @@
 name = "papermake"
 version = "0.1.0"
 edition = "2021"
+description = "Fast PDF generation library using Typst with schema validation and caching"
+license = "Apache-2.0"
+repository = "https://github.com/rkstgr/papermake"
+documentation = "https://docs.rs/papermake"
+homepage = "https://github.com/rkstgr/papermake"
+readme = "../../README.md"
+keywords = ["pdf", "typst", "template", "document", "generation"]
+categories = ["template-engine", "text-processing"]
+authors = ["Erik Steiger"]
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-time = { version = "0.3", features = ["serde", "macros", "formatting", "parsing"] }
+time = { version = "0.3", features = [
+    "serde",
+    "macros",
+    "formatting",
+    "parsing",
+] }
 async-trait = "0.1"
-tokio = { version = "1.44", features = ["fs", "sync"], optional = true}
+tokio = { version = "1.44", features = ["fs", "sync"], optional = true }
 # Typst
 typst = "0.13"
-typst-kit = {version="0.13", default-features = false, features = ["fonts"] }
+typst-kit = { version = "0.13", default-features = false, features = ["fonts"] }
 typst-library = "0.13"
 typst-pdf = "0.13"
 zune-inflate = { version = "0.2", default-features = false, features = [
