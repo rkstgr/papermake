@@ -5,7 +5,6 @@ pub mod error;
 pub mod schema;
 pub mod template;
 pub mod render;
-pub mod storage;
 pub mod typst;
 pub mod macros;
 pub mod cache;
@@ -14,7 +13,6 @@ pub use error::{PapermakeError, Result};
 pub use schema::{Schema, SchemaField, FieldType, SchemaBuilder};
 pub use template::{Template, TemplateId, TemplateBuilder};
 pub use render::{render_pdf, RenderOptions, RenderResult};
-pub use storage::Storage;
 pub use cache::{CachedTemplate, TemplateCache};
 
 /// Get the library version

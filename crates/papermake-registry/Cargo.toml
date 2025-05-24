@@ -1,0 +1,40 @@
+[package]
+name = "papermake-registry"
+version = "0.1.0"
+edition = "2024"
+description = "Template registry and versioning system for papermake"
+license = "Apache-2.0"
+repository = "https://github.com/rkstgr/papermake"
+documentation = "https://docs.rs/papermake-registry"
+homepage = "https://github.com/rkstgr/papermake"
+readme = "README.md"
+keywords = ["pdf", "typst", "templates", "registry", "versioning"]
+categories = ["template-engine"]
+authors = ["Erik Steiger"]
+
+[dependencies]
+papermake = { path = "../papermake", version = "0.1" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+async-trait = "0.1"
+time = { version = "0.3", features = ["serde", "macros"] }
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+# Optional features for different storage backends
+tokio = { version = "1.0", features = ["fs"], optional = true }
+sqlx = { version = "0.7", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "time",
+], optional = true }
+
+[features]
+default = ["fs"]
+fs = ["tokio"]
+postgres = ["sqlx"]
+
+[dev-dependencies]
+tempfile = "3.0"
+tokio = { version = "1.0", features = ["rt", "macros"] }

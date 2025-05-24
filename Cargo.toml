@@ -3,6 +3,7 @@ resolver = "2"
 
 members = [
     "crates/papermake",
+    "crates/papermake-registry",
     "crates/papermake-server",
     "crates/papermake-worker",
 ]
