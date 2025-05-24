@@ -223,4 +223,15 @@ impl TemplateBuilder {
         use crate::cache::TemplateCache;
         Ok(self.build()?.with_cache())
     }
+    
+    /// Convenience method for AWS Lambda and similar scenarios: parse raw content directly into a cached template
+    /// This is useful when you have template content from S3, databases, etc. and want immediate caching
+    pub fn from_raw_content_cached(id: impl Into<TemplateId>, content: impl Into<String>) -> Result<crate::cache::CachedTemplate> {
+        use crate::cache::TemplateCache;
+        let template = Self::new(id.into())
+            .name("Generated Template") // Default name
+            .content(content)
+            .build()?;
+        Ok(template.with_cache())
+    }
 }
