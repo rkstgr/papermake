@@ -8,12 +8,14 @@ pub mod render;
 pub mod storage;
 pub mod typst;
 pub mod macros;
+pub mod cache;
 // Re-export core types
 pub use error::{PapermakeError, Result};
 pub use schema::{Schema, SchemaField, FieldType, SchemaBuilder};
 pub use template::{Template, TemplateId, TemplateBuilder};
 pub use render::{render_pdf, RenderOptions, RenderResult};
 pub use storage::Storage;
+pub use cache::{CachedTemplate, TemplateCache};
 
 /// Get the library version
 pub fn version() -> &'static str {

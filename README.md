@@ -23,7 +23,7 @@ Papermake aims to provide the following core capabilities:
 Here's a simple example of creating and rendering a template:
 
 ```rust
-use papermake::{schema, Template};
+use papermake::{schema, Template, TemplateCache};
 use serde_json::json;
 
 // Define your document schema with macro
@@ -40,12 +40,40 @@ let template = Template::builder("invoice")
     .build()
     .unwrap();
 
-// Render with data using convenience method
+// For better performance, use caching
+let cached_template = template.with_cache();
+
+// Render with data - first render compiles, subsequent renders use cache
 let data = json!({
     "name": "John Doe"
 });
 
-let result = template.render(&data).unwrap();
+let result = cached_template.render(&data).unwrap();
+```
+
+## Performance with Caching
+
+For high-performance scenarios where you're rendering the same template multiple times with different data, use the caching API:
+
+```rust
+use papermake::Template;
+
+// Build with caching directly for convenience
+let cached_template = Template::builder("report")
+    .name("Monthly Report")
+    .content(include_str!("templates/report.typ"))
+    .schema(schema)
+    .build_cached()?;
+
+// Multiple renders reuse the compiled template
+for customer in customers {
+    let data = json!({"customer": customer});
+    let pdf = cached_template.render(&data)?;
+    // Cache is automatically managed
+}
+
+// Clear cache if needed
+cached_template.clear_cache()?;
 ```
 
 ## Using the HTTP API

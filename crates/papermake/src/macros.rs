@@ -11,12 +11,7 @@
 ///     name: String,
 ///     email: String,
 ///     age?: Number,
-///     address: {
-///         street: String,
-///         city: String,
-///         zip?: String
-///     },
-///     tags: [String]
+///     active: Boolean
 /// };
 /// ```
 #[macro_export]

@@ -217,4 +217,10 @@ impl TemplateBuilder {
             updated_at: now,
         })
     }
+    
+    /// Build the template with caching enabled for better performance
+    pub fn build_cached(self) -> Result<crate::cache::CachedTemplate> {
+        use crate::cache::TemplateCache;
+        Ok(self.build()?.with_cache())
+    }
 }

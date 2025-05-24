@@ -1,4 +1,6 @@
 [workspace]
+resolver = "2"
+
 members = [
     "crates/papermake",
     "crates/papermake-server",

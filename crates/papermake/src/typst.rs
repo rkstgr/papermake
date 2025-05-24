@@ -54,6 +54,7 @@ pub struct TypstWorld {
     files: Arc<Mutex<HashMap<FileId, FileEntry>>>,
 
     /// Cache directory (e.g. where packages are downloaded to).
+    #[allow(dead_code)]
     cache_directory: PathBuf,
 
     /// Datetime.
@@ -105,6 +106,7 @@ struct FileEntry {
 }
 
 impl FileEntry {
+    #[allow(dead_code)]
     fn new(bytes: Vec<u8>, source: Option<Source>) -> Self {
         Self {
             bytes: Bytes::new(bytes),

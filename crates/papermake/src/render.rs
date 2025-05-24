@@ -69,7 +69,7 @@ pub fn render_pdf(
             for diagnostic in diagnostics {
                 let span = diagnostic.span;
                 if let Some(id) = span.id() {
-                    if let Ok(file) = world.source(id) {
+                    if let Ok(_file) = world.source(id) {
                         if let Some(range) = world.range(span) {
                             errors.push(RenderError {
                                 message: diagnostic.message.to_string(),
