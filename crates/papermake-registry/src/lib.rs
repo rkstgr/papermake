@@ -34,19 +34,19 @@
 //!     .name("Invoice Template")
 //!     .content("Invoice for: #data.customer_name")
 //!     .build()?;
-//!     
+//!
 //! let version = registry.publish_template(
-//!     template, 
-//!     &user.id, 
+//!     template,
+//!     &user.id,
 //!     TemplateScope::User(user.id.clone())
 //! ).await?;
 //!
 //! // Render with access control
 //! let data = serde_json::json!({"customer_name": "ACME Corp"});
 //! let result = registry.render(
-//!     &"invoice-template".into(), 
-//!     Some(version), 
-//!     &data, 
+//!     &"invoice-template".into(),
+//!     Some(version),
+//!     &data,
 //!     &user.id
 //! ).await?;
 //! # Ok(())
@@ -54,14 +54,14 @@
 //! ```
 
 pub mod entities;
+pub mod error;
 pub mod registry;
 pub mod storage;
-pub mod error;
 
 pub use entities::*;
-pub use registry::*;
-pub use storage::{RegistryStorage, FileSystemStorage};
 pub use error::*;
+pub use registry::*;
+pub use storage::{RegistryStorage, file_storage::FileSystemStorage};
 
 // Re-export commonly used papermake types
-pub use papermake::{Template, TemplateId, TemplateBuilder, RenderResult, RenderOptions};
+pub use papermake::{RenderOptions, RenderResult, Template, TemplateBuilder, TemplateId};

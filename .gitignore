@@ -14,5 +14,5 @@ target/
 .env*
 
 fonts/
-storage/
+/storage/
 .vscode/
