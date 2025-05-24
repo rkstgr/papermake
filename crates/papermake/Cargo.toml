@@ -1,7 +1,7 @@
 [package]
 name = "papermake"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Fast PDF generation library using Typst with schema validation and caching"
 license = "Apache-2.0"
 repository = "https://github.com/rkstgr/papermake"
@@ -9,7 +9,7 @@ documentation = "https://docs.rs/papermake"
 homepage = "https://github.com/rkstgr/papermake"
 readme = "../../README.md"
 keywords = ["pdf", "typst", "template", "document", "generation"]
-categories = ["template-engine", "text-processing"]
+categories = ["template-engine", "text-processing", "rendering"]
 authors = ["Erik Steiger"]
 
 [dependencies]
