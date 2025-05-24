@@ -40,6 +40,11 @@ impl Schema {
         Schema { fields: Vec::new() }
     }
     
+    /// Create a new schema builder
+    pub fn builder() -> SchemaBuilder {
+        SchemaBuilder::new()
+    }
+    
     /// Add a field to the schema
     pub fn add_field(&mut self, field: SchemaField) -> &mut Self {
         self.fields.push(field);
@@ -128,5 +133,93 @@ impl Schema {
         }
         
         Ok(())
+    }
+}
+
+/// Builder for creating schemas with a fluent API
+#[derive(Debug, Default)]
+pub struct SchemaBuilder {
+    fields: Vec<SchemaField>,
+}
+
+impl SchemaBuilder {
+    /// Create a new schema builder
+    pub fn new() -> Self {
+        SchemaBuilder { fields: Vec::new() }
+    }
+    
+    /// Add a required field
+    pub fn field(mut self, key: impl Into<String>, field_type: FieldType) -> Self {
+        self.fields.push(SchemaField {
+            key: key.into(),
+            label: None,
+            field_type,
+            required: true,
+            description: None,
+            default: None,
+        });
+        self
+    }
+    
+    /// Add a required field with label
+    pub fn field_with_label(mut self, key: impl Into<String>, label: impl Into<String>, field_type: FieldType) -> Self {
+        self.fields.push(SchemaField {
+            key: key.into(),
+            label: Some(label.into()),
+            field_type,
+            required: true,
+            description: None,
+            default: None,
+        });
+        self
+    }
+    
+    /// Add a required field (alias for field)
+    pub fn required(self, key: impl Into<String>, field_type: FieldType) -> Self {
+        self.field(key, field_type)
+    }
+    
+    /// Add an optional field
+    pub fn optional(mut self, key: impl Into<String>, field_type: FieldType) -> Self {
+        self.fields.push(SchemaField {
+            key: key.into(),
+            label: None,
+            field_type,
+            required: false,
+            description: None,
+            default: None,
+        });
+        self
+    }
+    
+    /// Add an optional field with default value
+    pub fn optional_with_default(mut self, key: impl Into<String>, field_type: FieldType, default: serde_json::Value) -> Self {
+        self.fields.push(SchemaField {
+            key: key.into(),
+            label: None,
+            field_type,
+            required: false,
+            description: None,
+            default: Some(default),
+        });
+        self
+    }
+    
+    /// Add a field with description
+    pub fn field_with_description(mut self, key: impl Into<String>, field_type: FieldType, description: impl Into<String>) -> Self {
+        self.fields.push(SchemaField {
+            key: key.into(),
+            label: None,
+            field_type,
+            required: true,
+            description: Some(description.into()),
+            default: None,
+        });
+        self
+    }
+    
+    /// Build the schema
+    pub fn build(self) -> Schema {
+        Schema { fields: self.fields }
     }
 }

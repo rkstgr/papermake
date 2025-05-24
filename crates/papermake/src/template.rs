@@ -69,6 +69,11 @@ impl Template {
         }
     }
     
+    /// Create a new template builder
+    pub fn builder(id: impl Into<TemplateId>) -> TemplateBuilder {
+        TemplateBuilder::new(id.into())
+    }
+    
     /// Set the description
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
@@ -78,6 +83,26 @@ impl Template {
     /// Validate data against the template's schema
     pub fn validate_data(&self, data: &serde_json::Value) -> Result<()> {
         self.schema.validate(data)
+    }
+    
+    /// Render the template with data to a PDF
+    pub fn render(&self, data: &serde_json::Value) -> Result<crate::render::RenderResult> {
+        crate::render::render_pdf(self, data, None)
+    }
+    
+    /// Render the template with data and options to a PDF
+    pub fn render_with_options(&self, data: &serde_json::Value, options: crate::render::RenderOptions) -> Result<crate::render::RenderResult> {
+        crate::render::render_pdf(self, data, Some(options))
+    }
+    
+    /// Render the template with data using a cached world
+    pub fn render_with_cache(&self, data: &serde_json::Value, world_cache: Option<&mut crate::typst::TypstWorld>) -> Result<crate::render::RenderResult> {
+        crate::render::render_pdf_with_cache(self, data, world_cache, None)
+    }
+    
+    /// Render the template with data, options, and cached world
+    pub fn render_with_cache_and_options(&self, data: &serde_json::Value, world_cache: Option<&mut crate::typst::TypstWorld>, options: crate::render::RenderOptions) -> Result<crate::render::RenderResult> {
+        crate::render::render_pdf_with_cache(self, data, world_cache, Some(options))
     }
     
     pub fn from_file_content(id: impl Into<TemplateId>, content: &str) -> Result<Self> {
@@ -118,5 +143,78 @@ impl Template {
         
         let id = path.as_ref().file_stem().unwrap().to_string_lossy().to_string();
         Self::from_file_content(id, &content)
+    }
+}
+
+/// Builder for creating templates with a fluent API
+#[derive(Debug)]
+pub struct TemplateBuilder {
+    id: TemplateId,
+    name: Option<String>,
+    content: Option<String>,
+    schema: Option<Schema>,
+    description: Option<String>,
+}
+
+impl TemplateBuilder {
+    /// Create a new template builder
+    pub fn new(id: TemplateId) -> Self {
+        TemplateBuilder {
+            id,
+            name: None,
+            content: None,
+            schema: None,
+            description: None,
+        }
+    }
+    
+    /// Set the template name
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+    
+    /// Set the template content
+    pub fn content(mut self, content: impl Into<String>) -> Self {
+        self.content = Some(content.into());
+        self
+    }
+    
+    /// Set the template content from a file
+    pub fn content_from_file(mut self, path: impl AsRef<std::path::Path>) -> Result<Self> {
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| PapermakeError::Io(e))?;
+        self.content = Some(content);
+        Ok(self)
+    }
+    
+    /// Set the schema
+    pub fn schema(mut self, schema: Schema) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+    
+    /// Set the description
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+    
+    /// Build the template
+    pub fn build(self) -> Result<Template> {
+        let name = self.name.ok_or_else(|| PapermakeError::Template("Template name is required".to_string()))?;
+        let content = self.content.ok_or_else(|| PapermakeError::Template("Template content is required".to_string()))?;
+        let schema = self.schema.unwrap_or_default();
+        
+        let now = time::OffsetDateTime::now_utc();
+        Ok(Template {
+            id: self.id,
+            name,
+            content,
+            schema,
+            description: self.description,
+            created_at: now,
+            updated_at: now,
+        })
     }
 }

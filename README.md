@@ -1,6 +1,6 @@
 # Papermake
 
-Papermake is a fast & ergonomic PDF generation library, built in Rust. The core rendering engine is based on [Typst](https://github.com/typst/typst), which is a powerful typesetting system.
+Papermake is a fast PDF generation library built in Rust that uses [Typst](https://github.com/typst/typst) as its rendering engine. It's designed for high-volume, low-latency document processing with a focus on ergonomics and testability.
 
 ## Why Papermake?
 
@@ -23,34 +23,29 @@ Papermake aims to provide the following core capabilities:
 Here's a simple example of creating and rendering a template:
 
 ```rust
-use papermake::{Schema, SchemaField, FieldType, Template, render_pdf};
+use papermake::{schema, Template};
 use serde_json::json;
 
-// Define your document schema
-let mut schema = Schema::new();
-schema.add_field(SchemaField {
-    key: "name".to_string(),
-    label: Some("Name".to_string()),
-    field_type: FieldType::String,
-    required: true,
-    description: Some("Customer name".to_string()),
-    default: None,
-});
+// Define your document schema with macro
+let schema = schema! {
+    name: String,
+    age?: Number
+};
 
-// Create a template
-let template = Template::new(
-    "invoice",
-    "Invoice Template",
-    "#let data = json.decode(sys.inputs.data)\nHello #data.name!",
-    schema,
-);
+// Create a template with builder pattern
+let template = Template::builder("invoice")
+    .name("Invoice Template")
+    .content("#let data = json.decode(sys.inputs.data)\nHello #data.name!")
+    .schema(schema)
+    .build()
+    .unwrap();
 
-// Render with data
+// Render with data using convenience method
 let data = json!({
     "name": "John Doe"
 });
 
-let result = render_pdf(&template, &data, None).unwrap();
+let result = template.render(&data).unwrap();
 ```
 
 ## Using the HTTP API

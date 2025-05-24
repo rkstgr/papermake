@@ -7,11 +7,12 @@ pub mod template;
 pub mod render;
 pub mod storage;
 pub mod typst;
+pub mod macros;
 // Re-export core types
 pub use error::{PapermakeError, Result};
-pub use schema::{Schema, SchemaField, FieldType};
-pub use template::{Template, TemplateId};
-pub use render::{render_pdf, RenderOptions};
+pub use schema::{Schema, SchemaField, FieldType, SchemaBuilder};
+pub use template::{Template, TemplateId, TemplateBuilder};
+pub use render::{render_pdf, RenderOptions, RenderResult};
 pub use storage::Storage;
 
 /// Get the library version
