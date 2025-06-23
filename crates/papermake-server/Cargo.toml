@@ -5,13 +5,17 @@ edition = "2024"
 
 [dependencies]
 papermake = { path = "../papermake" }
+papermake-registry = { path = "../papermake-registry" }
 tokio = { version = "1", features = ["full"] }
-axum = "0.8.3"
-tower-http = { version = "0.6", features = ["trace", "cors"] }
+axum = { version = "0.8.3", features = ["ws"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
 time = { version = "0.3", features = [
     "serde",
     "macros",
@@ -19,3 +23,7 @@ time = { version = "0.3", features = [
     "parsing",
 ] }
 base64 = "0.22"
+thiserror = "1.0"
+async-trait = "0.1"
+futures = "0.3"
+dotenv = "0.15"
