@@ -1,6 +1,6 @@
 //! Template-related API models
 
-use papermake_registry::{entities::VersionedTemplate, TemplateId};
+use papermake_registry::{TemplateId, entities::VersionedTemplate};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -11,6 +11,7 @@ pub struct TemplateSummary {
     pub name: String,
     pub latest_version: u64,
     pub uses_24h: u64,
+    #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
     pub author: String,
 }
@@ -25,6 +26,7 @@ pub struct TemplateDetails {
     pub schema: Option<serde_json::Value>,
     pub version: u64,
     pub author: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
     pub uses_total: u64,
     pub uses_24h: u64,
@@ -58,6 +60,7 @@ impl From<VersionedTemplate> for TemplateDetails {
 #[derive(Debug, Serialize)]
 pub struct TemplateVersion {
     pub version: u64,
+    #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
     pub author: String,
     pub uses_total: u64,

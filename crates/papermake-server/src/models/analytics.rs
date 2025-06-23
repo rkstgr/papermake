@@ -10,22 +10,22 @@ use time::OffsetDateTime;
 pub struct DashboardMetrics {
     /// Current queue depth (jobs waiting to be processed)
     pub queue_depth: i64,
-    
+
     /// P90 latency in milliseconds (last 1000 jobs)
     pub p90_latency_ms: Option<i64>,
-    
+
     /// Total renders in last 24 hours
     pub total_renders_24h: i64,
-    
+
     /// Success rate in last 24 hours (0.0 to 1.0)
     pub success_rate_24h: f64,
-    
+
     /// Most recent render jobs
     pub recent_renders: Vec<RenderJobSummary>,
-    
+
     /// Most popular templates (last 24h)
     pub popular_templates: Vec<TemplateUsage>,
-    
+
     /// Recently published templates
     pub new_templates: Vec<TemplateSummary>,
 }
@@ -40,6 +40,7 @@ pub struct TemplateUsage {
     pub uses_7d: i64,
     pub uses_30d: i64,
     pub uses_total: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
     pub avg_render_time_ms: Option<f64>,
 }
@@ -49,10 +50,10 @@ pub struct TemplateUsage {
 pub struct PerformanceMetrics {
     /// Time period these metrics cover
     pub period: TimePeriod,
-    
+
     /// Data points over time
     pub data_points: Vec<PerformanceDataPoint>,
-    
+
     /// Summary statistics
     pub summary: PerformanceSummary,
 }
@@ -95,16 +96,16 @@ pub enum TimePeriod {
 pub struct AnalyticsQuery {
     /// Time period to analyze
     pub period: Option<TimePeriod>,
-    
+
     /// Start date for analysis
     pub date_from: Option<OffsetDateTime>,
-    
+
     /// End date for analysis
     pub date_to: Option<OffsetDateTime>,
-    
+
     /// Filter by specific template ID
     pub template_id: Option<TemplateId>,
-    
+
     /// Limit number of results
     pub limit: Option<u32>,
 }

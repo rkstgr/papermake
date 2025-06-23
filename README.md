@@ -1,119 +1,199 @@
 # Papermake
 
-Papermake is a fast PDF generation library built in Rust that uses [Typst](https://github.com/typst/typst) as its rendering engine. It's designed for high-volume, low-latency document processing with a focus on ergonomics and testability.
+Papermake is a fast PDF generation service built in Rust using [Typst](https://github.com/typst/typst) as the rendering engine. Generate PDFs via HTTP API or embed the core library directly in your applications.
 
-## Why Papermake?
+**🚀 Fast**: From request to PDF in under 20ms. That's 100x faster than traditional PDF generation methods.
+**📐 Type-safe**: Schema validation with JSON data binding
+**🔧 Production-ready**: Template versioning, background workers, and S3 storage
 
-Papermake was born from experiences in finance where existing PDF generation tools couldn't meet the demands of high-volume, low-latency document processing at scale. Legacy tools like Crystal Reports have legacy dependencies, are difficult to version control, and lacked proper testing capabilities. Papermake solves these challenges by providing a fast, cloud-ready PDF generator with a focus on ergonomics, testability, and debuggability - all while remaining platform-independent.
+⚠️ **Early Development**: APIs and features are subject to change.
 
-⚠️ **Please Note:** This project is in its early stages of development. Features, APIs, and documentation are subject to change.
+## Quick Start - HTTP API
 
-## Key Features
+Get a PDF generated in under 2 minutes:
 
--   **🚀 High Performance**: Built with Rust and Typst for fast, low-latency PDF generation. Automatic template compilation caching for high-volume document processing
--   **🔧 Ergonomic API**: Builder patterns and fluent interfaces for ease of use, with seamless data binding from JSON
--   **📐 Schema Validation**: Type-safe data binding with compile-time schema macros
+### 1. Start the Services
 
-## Planned Features
+```bash
+git clone https://github.com/rkstgr/papermake-rs
+cd papermake-rs
 
--   Template versioning and management system
--   HTTP API server for microservice deployments
--   Enhanced debugging and error reporting
--   Additional output formats beyond PDF
+# Start MinIO (S3-compatible storage)
+docker-compose up -d
 
-## Quick Start
-
-Here's a simple example of creating and rendering a template:
-
-```rust
-use papermake::{schema, Template, TemplateCache};
-use serde_json::json;
-
-// Define your document schema with macro
-let schema = schema! {
-    name: String,
-    age?: Number
-};
-
-// Create a template with builder pattern
-let template = Template::builder("invoice")
-    .name("Invoice Template")
-    .content("#let data = json.decode(sys.inputs.data)\nHello #data.name!")
-    .schema(schema)
-    .build()
-    .unwrap();
-
-// For better performance, use caching
-let cached_template = template.with_cache();
-
-// Render with data - first render compiles, subsequent renders use cache
-let data = json!({
-    "name": "John Doe"
-});
-
-let result = cached_template.render(&data).unwrap();
+# Start the Papermake server
+cargo run -p papermake-server
 ```
 
-## Performance with Caching
+Server starts at `http://localhost:3000`
 
-For high-performance scenarios where you're rendering the same template multiple times with different data, use the caching API:
+### 2. Create a Template
+
+```bash
+curl -X POST http://localhost:3000/api/templates \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "hello-world",
+    "name": "Hello World Template",
+    "content": "Hello #data.name!",
+    "author": "you",
+    "schema": {
+      "type": "object",
+      "properties": {
+        "name": {"type": "string"}
+      }
+    }
+  }'
+```
+
+### 3. Generate a PDF
+
+```bash
+curl -X POST http://localhost:3000/api/renders \
+  -H "Content-Type: application/json" \
+  -d '{
+    "template_id": "hello-world",
+    "template_version": 1,
+    "data": {"name": "World"}
+  }'
+```
+
+Returns a render job ID like:
+```json
+{
+  "data": {
+    "id": "b2d56b44-0431-438a-b88e-16841b87cbf8",
+    "status": "queued",
+    "created_at": "2025-06-23T20:53:53.291987Z",
+    "estimated_completion": null
+  }
+}
+```
+
+### 4. Download the PDF
+
+```bash
+# Check status
+curl http://localhost:3000/api/renders/b2d56b44-0431-438a-b88e-16841b87cbf8
+
+# Download PDF when completed
+curl http://localhost:3000/api/renders/b2d56b44-0431-438a-b88e-16841b87cbf8/pdf -o hello.pdf
+```
+
+## More Examples
+
+### Batch Rendering
+
+Generate multiple PDFs at once:
+
+```bash
+curl -X POST http://localhost:3000/api/renders/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "requests": [
+      {
+        "template_id": "hello-world",
+        "template_version": 1,
+        "data": {"name": "Alice"}
+      },
+      {
+        "template_id": "hello-world",
+        "template_version": 1,
+        "data": {"name": "Bob"}
+      }
+    ]
+  }'
+```
+
+### Template Management
+
+```bash
+# List all templates
+curl http://localhost:3000/api/templates
+
+# Get specific template
+curl http://localhost:3000/api/templates/invoice
+
+# List template versions
+curl http://localhost:3000/api/templates/invoice/versions
+```
+
+## Using the Core Library
+
+For embedding Papermake directly in your Rust applications:
 
 ```rust
-use papermake::Template;
+use papermake::{TemplateBuilder, Schema};
+use serde_json::json;
 
-// Build with caching directly for convenience
-let cached_template = Template::builder("report")
-    .name("Monthly Report")
+// Create a template with builder pattern
+let template = TemplateBuilder::new("invoice".into())
+    .name("Invoice Template")
+    .content("= Invoice\n\nHello #data.name!\nTotal: $#data.amount")
+    .schema(Schema::from_value(json!({
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "amount": {"type": "number"}
+        }
+    })))
+    .build()?;
+
+// Render with data
+let data = json!({
+    "name": "John Doe",
+    "amount": 1250.50
+});
+
+let result = template.render(&data)?;
+if let Some(pdf_bytes) = result.pdf {
+    std::fs::write("invoice.pdf", pdf_bytes)?;
+}
+```
+
+### High-Performance Rendering
+
+For high-volume scenarios, use template caching:
+
+```rust
+// Build with caching for better performance
+let cached_template = TemplateBuilder::new("report".into())
     .content(include_str!("templates/report.typ"))
-    .schema(schema)
     .build_cached()?;
 
 // Multiple renders reuse the compiled template
 for customer in customers {
     let data = json!({"customer": customer});
     let pdf = cached_template.render(&data)?;
-    // Cache is automatically managed
+    // Template compilation is cached automatically
 }
-
-// Clear cache if needed
-cached_template.clear_cache()?;
 ```
 
-## Manual Testing with SQLite + S3
+### Environment Configuration
 
-For testing the registry system with real storage backends:
+Copy `.env.example` to `.env` and configure:
 
-1. **Start MinIO (S3-compatible storage):**
-   ```bash
-   docker-compose up -d
-   ```
+```bash
+# Database
+DATABASE_URL=sqlite:./data/papermake.db
 
-2. **Set up environment:**
-   ```bash
-   cp .env.example .env
-   # Edit .env if needed for custom configuration
-   ```
+# S3 Storage
+S3_ACCESS_KEY_ID=minioadmin
+S3_SECRET_ACCESS_KEY=minioadmin
+S3_ENDPOINT_URL=http://localhost:9000
+S3_BUCKET=papermake-dev
 
-3. **Run manual test:**
-   ```bash
-   cd crates/papermake-registry
-   cargo run --example manual_test --features sqlite,s3
-   ```
+# Server
+HOST=0.0.0.0
+PORT=3000
+```
 
-4. **Browse stored data:**
-   - MinIO Console: http://localhost:9001 (minioadmin/minioadmin)
-   - Check the `papermake-dev` bucket for stored templates and assets
-   - SQLite database: `./data/papermake.db` (use any SQLite browser)
+## Project Structure
 
-5. **Stop services:**
-   ```bash
-   docker-compose down
-   ```
-
-## Documentation
-
-For more detailed documentation and examples, please visit our documentation (coming soon).
+- **`papermake/`** - Core PDF generation library
+- **`papermake-registry/`** - Template versioning and storage
+- **`papermake-server/`** - HTTP API server with background workers
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions welcome! Please submit a Pull Request.
