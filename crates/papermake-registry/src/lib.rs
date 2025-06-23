@@ -61,7 +61,19 @@ pub mod storage;
 pub use entities::*;
 pub use error::*;
 pub use registry::*;
-pub use storage::{RegistryStorage, file_storage::FileSystemStorage};
+pub use storage::{MetadataStorage, FileStorage, TypstFileSystem, RegistryStorage};
+
+#[cfg(feature = "tikv")]
+pub use storage::tikv_storage::TiKVStorage;
+
+#[cfg(feature = "s3")]
+pub use storage::s3_storage::S3Storage;
+
+pub use storage::registry_filesystem::RegistryFileSystem;
+
+// Legacy exports
+#[cfg(feature = "fs")]
+pub use storage::file_storage::FileSystemStorage;
 
 // Re-export commonly used papermake types
 pub use papermake::{RenderOptions, RenderResult, Template, TemplateBuilder, TemplateId};

@@ -30,10 +30,21 @@ sqlx = { version = "0.7", features = [
     "time",
 ], optional = true }
 
+# New storage backends
+tikv-client = { version = "0.3", optional = true }
+aws-sdk-s3 = { version = "1.0", optional = true }
+aws-config = { version = "1.0", optional = true }
+
 [features]
-default = ["fs"]
+default = ["tikv", "s3"]
+# New storage backends
+tikv = ["tikv-client", "tokio"]
+s3 = ["aws-sdk-s3", "aws-config", "tokio"]
+# Legacy storage backends
 fs = ["tokio"]
 postgres = ["sqlx"]
+# Testing/development
+memory = []
 
 [dev-dependencies]
 tempfile = "3.0"

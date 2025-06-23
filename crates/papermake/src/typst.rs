@@ -10,6 +10,7 @@ use typst::text::{Font, FontBook};
 use typst::utils::LazyHash;
 use typst::Library;
 use typst_kit::fonts::{FontSearcher, FontSlot};
+use async_trait::async_trait;
 
 // Define a static lazy variable to hold the cached fonts
 static CACHED_FONTS: Lazy<(FontBook, Vec<Font>)> = Lazy::new(|| {
@@ -35,8 +36,17 @@ static CACHED_FONTS: Lazy<(FontBook, Vec<Font>)> = Lazy::new(|| {
     (book, fonts)
 });
 
+/// File system abstraction for Typst rendering
+///
+/// This trait provides file access to TypstWorld during rendering,
+/// allowing integration with various storage backends.
+#[async_trait]
+pub trait TypstFileSystem: Send + Sync {
+    /// Get file content by path
+    async fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError>;
+}
+
 /// Main interface that determines the environment for Typst.
-#[derive(Debug)]
 pub struct TypstWorld {
     /// The content of a source.
     pub source: Source,
@@ -59,6 +69,24 @@ pub struct TypstWorld {
 
     /// Datetime.
     time: time::OffsetDateTime,
+
+    /// File system abstraction for loading template files/assets
+    file_system: Option<Arc<dyn TypstFileSystem>>,
+}
+
+impl std::fmt::Debug for TypstWorld {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TypstWorld")
+            .field("source", &self.source)
+            .field("library", &self.library)
+            .field("book", &self.book)
+            .field("fonts_count", &self.fonts.len())
+            .field("files_count", &self.files.lock().map(|f| f.len()).unwrap_or(0))
+            .field("cache_directory", &self.cache_directory)
+            .field("time", &self.time)
+            .field("has_file_system", &self.file_system.is_some())
+            .finish()
+    }
 }
 
 impl TypstWorld {
@@ -81,7 +109,19 @@ impl TypstWorld {
                 .map(|os_path| os_path.into())
                 .unwrap_or(std::env::temp_dir()),
             files: Arc::new(Mutex::new(HashMap::new())),
+            file_system: None,
         }
+    }
+
+    /// Create TypstWorld with file system support
+    pub fn with_file_system(
+        template_content: String,
+        data: String,
+        file_system: Arc<dyn TypstFileSystem>
+    ) -> Self {
+        let mut world = Self::new(template_content, data);
+        world.file_system = Some(file_system);
+        world
     }
 
     pub fn update_data(&mut self, data: String) -> Result<(), String> {
@@ -132,14 +172,49 @@ impl TypstWorld {
     ///
     /// Requests will be either in packages or a local file.
     fn file(&self, id: FileId) -> FileResult<FileEntry> {
-        let files = self.files.lock().map_err(|_| FileError::AccessDenied)?;
+        let mut files = self.files.lock().map_err(|_| FileError::AccessDenied)?;
         if let Some(entry) = files.get(&id) {
             return Ok(entry.clone());
         }
 
-        // TODO: handle packages and other sources
+        // If we have a file system, try to resolve the file
+        if let Some(fs) = &self.file_system {
+            // Convert FileId to path - this is a simplified implementation
+            // In practice, you'd need more sophisticated path resolution
+            let path = self.id_to_path(id)?;
+            
+            // Use tokio runtime to block on async call
+            // This is not ideal but necessary since typst::World::file is sync
+            let rt = tokio::runtime::Handle::try_current()
+                .map_err(|_| FileError::Other(Some("No tokio runtime available".into())))?;
+            
+            let content = rt.block_on(fs.get_file(&path))
+                .map_err(|_| FileError::NotFound(path.into()))?;
+            
+            let entry = FileEntry::new(content, None);
+            files.insert(id, entry.clone());
+            return Ok(entry);
+        }
+
         eprintln!("accessing file id: {id:?}");
         Err(FileError::AccessDenied)
+    }
+    
+    /// Convert FileId to file path
+    /// This is a simplified implementation - in practice you'd need more sophisticated mapping
+    fn id_to_path(&self, id: FileId) -> FileResult<String> {
+        // For now, just use the file ID's debug representation as the path
+        // This would need to be improved based on how Typst resolves imports
+        let id_str = format!("{:?}", id);
+        // Remove quotes and extract the actual path if it exists
+        if id_str.starts_with("FileId(") && id_str.ends_with(")") {
+            let path = &id_str[7..id_str.len()-1];
+            if path.starts_with("\"") && path.ends_with("\"") {
+                return Ok(path[1..path.len()-1].to_string());
+            }
+            return Ok(path.to_string());
+        }
+        Ok(id_str)
     }
 
 }
