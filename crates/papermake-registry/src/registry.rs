@@ -9,13 +9,6 @@ use std::hash::{Hash, Hasher};
 /// High-level template registry interface
 #[async_trait]
 pub trait TemplateRegistry {
-    /// Publish a new template version
-    async fn publish_template(
-        &self,
-        template: Template,
-        version: u64,
-        author: String,
-    ) -> Result<VersionedTemplate>;
 
     /// Get a specific template version
     async fn get_template(&self, id: &TemplateId, version: u64) -> Result<VersionedTemplate>;
@@ -47,6 +40,18 @@ pub trait TemplateRegistry {
         version: u64,
         data: &serde_json::Value,
     ) -> Result<Option<RenderJob>>;
+
+    /// Get the latest version of a template
+    async fn get_latest_template(&self, id: &TemplateId) -> Result<VersionedTemplate>;
+
+    /// List all templates (all latest versions)
+    async fn list_templates(&self) -> Result<Vec<VersionedTemplate>>;
+
+    /// List all render jobs
+    async fn list_render_jobs(&self) -> Result<Vec<RenderJob>>;
+
+    /// Publish a new template (auto-increment version)
+    async fn publish_template(&self, template: Template, author: String) -> Result<VersionedTemplate>;
 }
 
 /// Default implementation of the template registry
@@ -70,16 +75,6 @@ impl DefaultRegistry {
 
 #[async_trait]
 impl TemplateRegistry for DefaultRegistry {
-    async fn publish_template(
-        &self,
-        template: Template,
-        version: u64,
-        author: String,
-    ) -> Result<VersionedTemplate> {
-        let versioned_template = VersionedTemplate::new(template, version, author);
-        self.metadata_storage.save_versioned_template(&versioned_template).await?;
-        Ok(versioned_template)
-    }
 
     async fn get_template(&self, id: &TemplateId, version: u64) -> Result<VersionedTemplate> {
         self.metadata_storage.get_versioned_template(id, version).await
@@ -130,5 +125,42 @@ impl TemplateRegistry for DefaultRegistry {
         let data_hash = format!("{:x}", hasher.finish());
         
         self.metadata_storage.find_render_job_by_hash(template_id, version, &data_hash).await
+    }
+
+    async fn get_latest_template(&self, id: &TemplateId) -> Result<VersionedTemplate> {
+        let versions = self.metadata_storage.list_template_versions(id).await?;
+        let latest_version = versions.into_iter().max().ok_or_else(|| {
+            crate::RegistryError::TemplateNotFound(format!("No versions found for template {:?}", id))
+        })?;
+        self.metadata_storage.get_versioned_template(id, latest_version).await
+    }
+
+    async fn list_templates(&self) -> Result<Vec<VersionedTemplate>> {
+        self.metadata_storage.list_all_templates().await
+    }
+
+    async fn list_render_jobs(&self) -> Result<Vec<RenderJob>> {
+        self.metadata_storage.list_all_render_jobs().await
+    }
+
+    async fn publish_template(&self, template: Template, author: String) -> Result<VersionedTemplate> {
+        // Get next version number
+        let versions = self.metadata_storage.list_template_versions(&template.id).await.unwrap_or_default();
+        let next_version = versions.into_iter().max().unwrap_or(0) + 1;
+        
+        // Create versioned template
+        let versioned_template = VersionedTemplate::new(template, next_version, author);
+        
+        // Save to storage
+        self.metadata_storage.save_versioned_template(&versioned_template).await?;
+        
+        Ok(versioned_template)
+    }
+}
+
+impl DefaultRegistry {
+    /// Access to file storage (for direct operations like PDF downloads)
+    pub fn file_storage(&self) -> &Arc<dyn FileStorage> {
+        &self.file_storage
     }
 }

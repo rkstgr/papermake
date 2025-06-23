@@ -6,7 +6,8 @@
 use super::MetadataStorage;
 use crate::{RegistryError, entities::*, error::Result};
 use async_trait::async_trait;
-use papermake::TemplateId;
+use papermake::{TemplateId, Schema, Template};
+use time::OffsetDateTime;
 use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
 use std::str::FromStr;
 
@@ -504,6 +505,114 @@ impl MetadataStorage for SqliteStorage {
                 completed_at,
                 error_message: row.get("error_message"),
             });
+        }
+
+        Ok(jobs)
+    }
+
+    async fn list_all_templates(&self) -> Result<Vec<VersionedTemplate>> {
+        let rows = sqlx::query(
+            "SELECT template_id, version, template_name, template_description, 
+                    template_content, template_schema, author, published_at
+             FROM versioned_templates 
+             WHERE (template_id, version) IN (
+                 SELECT template_id, MAX(version) 
+                 FROM versioned_templates 
+                 GROUP BY template_id
+             )
+             ORDER BY published_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| RegistryError::Storage(format!("Failed to list all templates: {}", e)))?;
+
+        let mut templates = Vec::new();
+        for row in rows {
+            let template_id = TemplateId::from(row.get::<String, _>("template_id"));
+            let schema_str: String = row.get::<Option<String>, _>("template_schema").unwrap_or_default();
+            let schema: Schema = serde_json::from_str(&schema_str).unwrap_or_default();
+
+            let published_at_ts: i64 = row.get("published_at");
+            let published_at = OffsetDateTime::from_unix_timestamp(published_at_ts)
+                .unwrap_or_else(|_| OffsetDateTime::now_utc());
+
+            let template = Template {
+                id: template_id,
+                name: row.get("template_name"),
+                description: row.get("template_description"),
+                content: row.get("template_content"),
+                schema,
+                created_at: published_at,
+                updated_at: published_at,
+            };
+
+            let versioned_template = VersionedTemplate {
+                template,
+                version: row.get::<i64, _>("version") as u64,
+                author: row.get("author"),
+                forked_from: None, // TODO: Store this in database if needed
+                published_at,
+                immutable: true,
+                schema: None, // TODO: Store this in database if needed
+            };
+
+            templates.push(versioned_template);
+        }
+
+        Ok(templates)
+    }
+
+    async fn list_all_render_jobs(&self) -> Result<Vec<RenderJob>> {
+        let rows = sqlx::query(
+            "SELECT id, template_id, template_version, data, data_hash, 
+                    pdf_s3_key, created_at, completed_at, rendering_latency
+             FROM render_jobs 
+             ORDER BY created_at DESC"
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| RegistryError::Storage(format!("Failed to list all render jobs: {}", e)))?;
+
+        let mut jobs = Vec::new();
+        for row in rows {
+            let template_id = TemplateId::from(row.get::<String, _>("template_id"));
+            let data_str: String = row.get("data");
+            let data: serde_json::Value = serde_json::from_str(&data_str)
+                .map_err(|e| RegistryError::Storage(format!("Failed to parse render job data: {}", e)))?;
+
+            let created_at_ts: i64 = row.get("created_at");
+            let created_at = OffsetDateTime::from_unix_timestamp(created_at_ts)
+                .unwrap_or_else(|_| OffsetDateTime::now_utc());
+
+            let completed_at = row.get::<Option<i64>, _>("completed_at")
+                .map(|ts| OffsetDateTime::from_unix_timestamp(ts)
+                    .unwrap_or_else(|_| OffsetDateTime::now_utc()));
+
+            let pdf_s3_key: Option<String> = row.get("pdf_s3_key");
+
+            let job = RenderJob {
+                id: row.get("id"),
+                template_id,
+                template_version: row.get::<i64, _>("template_version") as u64,
+                data,
+                data_hash: row.get("data_hash"),
+                status: if completed_at.is_some() {
+                    if pdf_s3_key.is_some() {
+                        RenderStatus::Completed
+                    } else {
+                        RenderStatus::Failed
+                    }
+                } else {
+                    RenderStatus::Pending
+                },
+                pdf_s3_key,
+                rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
+                created_at,
+                completed_at,
+                error_message: None, // TODO: Store this in database if needed
+            };
+
+            jobs.push(job);
         }
 
         Ok(jobs)

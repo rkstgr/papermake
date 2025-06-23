@@ -74,6 +74,12 @@ pub trait MetadataStorage: Send + Sync {
         template_id: &papermake::TemplateId,
         version: Option<u64>,
     ) -> Result<Vec<RenderJob>>;
+
+    /// List all templates (latest version of each)
+    async fn list_all_templates(&self) -> Result<Vec<VersionedTemplate>>;
+
+    /// List all render jobs
+    async fn list_all_render_jobs(&self) -> Result<Vec<RenderJob>>;
 }
 
 /// File storage trait for binary data
