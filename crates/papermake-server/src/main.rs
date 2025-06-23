@@ -24,6 +24,7 @@ mod error;
 mod models;
 mod routes;
 mod services;
+mod worker;
 
 use config::ServerConfig;
 use error::Result;
@@ -66,6 +67,10 @@ async fn main() -> Result<()> {
 
     // Create application state
     let state = AppState { registry, config: config.clone() };
+
+    // Start background render worker
+    worker::spawn_render_worker(state.clone());
+    info!("🔧 Background render worker started");
 
     // Build router
     let app = create_router(state);

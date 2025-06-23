@@ -148,3 +148,9 @@ When using PostgreSQL storage:
 - Template compilation: First render is slower due to compilation
 - PostgreSQL tests: Require a test database connection
 - Workspace dependencies: Use path dependencies for local development
+
+## Git Commit Guidelines
+
+- **NEVER** include Claude or AI assistant attributions in commit messages
+- Keep commit messages focused on the technical changes made
+- Use conventional commit format: `type: description`

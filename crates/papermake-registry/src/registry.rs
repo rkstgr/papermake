@@ -52,6 +52,9 @@ pub trait TemplateRegistry {
 
     /// Publish a new template (auto-increment version)
     async fn publish_template(&self, template: Template, author: String) -> Result<VersionedTemplate>;
+
+    /// Update render job status
+    async fn update_render_job(&self, job: &RenderJob) -> Result<()>;
 }
 
 /// Default implementation of the template registry
@@ -155,6 +158,10 @@ impl TemplateRegistry for DefaultRegistry {
         self.metadata_storage.save_versioned_template(&versioned_template).await?;
         
         Ok(versioned_template)
+    }
+
+    async fn update_render_job(&self, job: &RenderJob) -> Result<()> {
+        self.metadata_storage.save_render_job(job).await
     }
 }
 

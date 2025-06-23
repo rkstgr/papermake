@@ -45,6 +45,9 @@ pub enum ApiError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     
+    #[error("Papermake error: {0}")]
+    Papermake(#[from] papermake::PapermakeError),
+    
     #[error("Timeout error: operation timed out")]
     Timeout,
 }

@@ -36,6 +36,12 @@ pub struct RenderError {
     pub end: usize
 }
 
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ({}:{})", self.message, self.start, self.end)
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct RenderResult {
     pub pdf: Option<Vec<u8>>,
