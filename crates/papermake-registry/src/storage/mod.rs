@@ -5,6 +5,10 @@ use async_trait::async_trait;
 // Re-export for convenience
 pub use papermake::FileError;
 
+// SQLite implementation
+#[cfg(feature = "sqlite")]
+pub mod sqlite_storage;
+
 // TiKV implementation
 #[cfg(feature = "tikv")]
 pub mod tikv_storage;

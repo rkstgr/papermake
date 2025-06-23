@@ -63,6 +63,9 @@ pub use error::*;
 pub use registry::*;
 pub use storage::{MetadataStorage, FileStorage, TypstFileSystem, RegistryStorage};
 
+#[cfg(feature = "sqlite")]
+pub use storage::sqlite_storage::SqliteStorage;
+
 #[cfg(feature = "tikv")]
 pub use storage::tikv_storage::TiKVStorage;
 

@@ -11,7 +11,7 @@ use axum::{
 };
 use base64::{prelude::BASE64_STANDARD, Engine};
 use papermake::{
-    error::PapermakeError, render::{render_pdf, RenderError, RenderOptions}, storage::{FileStorage, Storage}, template::{Template, TemplateId}
+    error::PapermakeError, render::{render_pdf, RenderError, RenderOptions}, template::{Template, TemplateId}
 };
 use serde::{Deserialize, Serialize};
 use tower_http::trace::TraceLayer;

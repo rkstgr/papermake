@@ -6,14 +6,17 @@
 use crate::{error::Result, RegistryError};
 use super::FileStorage;
 use async_trait::async_trait;
-use aws_sdk_s3::{Client, Config};
-use aws_sdk_s3::primitives::ByteStream;
-//use aws_sdk_s3::operation::get_object::GetObjectError;
-//use aws_sdk_s3::operation::put_object::PutObjectError;
-//use aws_sdk_s3::operation::delete_object::DeleteObjectError;
-//use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
+use minio::s3::{
+    client::Client, 
+    creds::StaticProvider, 
+    http::BaseUrl,
+    types::{S3Api, ToStream},
+    segmented_bytes::SegmentedBytes
+};
+use futures_util::StreamExt;
+use std::str::FromStr;
 
-/// S3-compatible file storage implementation
+/// S3-compatible file storage implementation using MinIO client
 pub struct S3Storage {
     client: Client,
     bucket: String,
@@ -31,48 +34,58 @@ impl S3Storage {
     /// Create S3 storage from environment variables
     /// 
     /// Expects:
-    /// - AWS_REGION or AWS_DEFAULT_REGION
-    /// - AWS_ACCESS_KEY_ID 
-    /// - AWS_SECRET_ACCESS_KEY
-    /// - AWS_ENDPOINT_URL (optional, for S3-compatible services)
+    /// - S3_ACCESS_KEY_ID 
+    /// - S3_SECRET_ACCESS_KEY
+    /// - S3_ENDPOINT_URL (for S3-compatible services like MinIO)
     /// - S3_BUCKET
+    /// - S3_REGION (optional, defaults to us-east-1)
     pub async fn from_env() -> Result<Self> {
         let bucket = std::env::var("S3_BUCKET")
             .map_err(|_| RegistryError::Storage("S3_BUCKET environment variable not set".to_string()))?;
         
-        let config = aws_config::load_defaults(aws_config::BehaviorVersion::latest()).await;
-        let s3_config = aws_sdk_s3::config::Builder::from(&config);
+        let access_key = std::env::var("S3_ACCESS_KEY_ID")
+            .map_err(|_| RegistryError::Storage("S3_ACCESS_KEY_ID environment variable not set".to_string()))?;
         
-        // Check for custom endpoint (for MinIO, JuiceFS, etc.)
-        let s3_config = if let Ok(endpoint) = std::env::var("AWS_ENDPOINT_URL") {
-            s3_config.endpoint_url(&endpoint)
-        } else {
-            s3_config
-        };
+        let secret_key = std::env::var("S3_SECRET_ACCESS_KEY")
+            .map_err(|_| RegistryError::Storage("S3_SECRET_ACCESS_KEY environment variable not set".to_string()))?;
         
-        let client = Client::from_conf(s3_config.build());
+        let endpoint_url = std::env::var("S3_ENDPOINT_URL")
+            .map_err(|_| RegistryError::Storage("S3_ENDPOINT_URL environment variable not set".to_string()))?;
+        
+        // Create base URL for endpoint
+        let base_url = BaseUrl::from_str(&endpoint_url)
+            .map_err(|e| RegistryError::Storage(format!("Invalid S3_ENDPOINT_URL: {}", e)))?;
+        
+        // Create credentials provider
+        let creds_provider = StaticProvider::new(&access_key, &secret_key, None);
+        
+        // Create client
+        let client = Client::new(
+            base_url,
+            Some(Box::new(creds_provider)),
+            None, // Default region
+            None, // No custom HTTP client
+        ).map_err(|e| RegistryError::Storage(format!("Failed to create S3 client: {}", e)))?;
         
         Ok(Self::new(client, bucket))
     }
     
-    /// Create S3 storage with custom configuration
-    pub fn with_config(config: Config, bucket: impl Into<String>) -> Self {
-        let client = Client::from_conf(config);
-        Self::new(client, bucket)
-    }
-    
     /// Ensure bucket exists (create if it doesn't)
     pub async fn ensure_bucket(&self) -> Result<()> {
-        // Try to head the bucket first
-        match self.client.head_bucket().bucket(&self.bucket).send().await {
-            Ok(_) => return Ok(()), // Bucket exists
-            Err(_) => {
-                // Bucket doesn't exist or we don't have access, try to create it
-                match self.client.create_bucket().bucket(&self.bucket).send().await {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(RegistryError::Storage(format!("Failed to create bucket '{}': {}", self.bucket, e))),
+        // Check if bucket exists
+        match self.client.bucket_exists(&self.bucket).send().await {
+            Ok(response) => {
+                if response.exists {
+                    Ok(()) // Bucket exists
+                } else {
+                    // Bucket doesn't exist, try to create it
+                    match self.client.create_bucket(&self.bucket).send().await {
+                        Ok(_) => Ok(()),
+                        Err(e) => Err(RegistryError::Storage(format!("Failed to create bucket '{}': {}", self.bucket, e))),
+                    }
                 }
             }
+            Err(e) => Err(RegistryError::Storage(format!("Failed to check bucket '{}': {}", self.bucket, e))),
         }
     }
 }
@@ -80,13 +93,11 @@ impl S3Storage {
 #[async_trait]
 impl FileStorage for S3Storage {
     async fn put_file(&self, key: &str, content: &[u8]) -> Result<()> {
-        let body = ByteStream::from(content.to_vec());
+        let bytes = bytes::Bytes::from(content.to_vec());
+        let segmented_bytes = SegmentedBytes::from(bytes);
         
         self.client
-            .put_object()
-            .bucket(&self.bucket)
-            .key(key)
-            .body(body)
+            .put_object(&self.bucket, key, segmented_bytes)
             .send()
             .await
             .map_err(|e| RegistryError::Storage(format!("Failed to put file '{}': {}", key, e)))?;
@@ -96,24 +107,20 @@ impl FileStorage for S3Storage {
     
     async fn get_file(&self, key: &str) -> Result<Vec<u8>> {
         let response = self.client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(key)
+            .get_object(&self.bucket, key)
             .send()
             .await
             .map_err(|e| RegistryError::Storage(format!("Failed to get file '{}': {}", key, e)))?;
         
-        let body = response.body.collect().await
-            .map_err(|e| RegistryError::Storage(format!("Failed to read file '{}' body: {}", key, e)))?;
+        let content = response.content.to_segmented_bytes().await
+            .map_err(|e| RegistryError::Storage(format!("Failed to read file '{}' content: {}", key, e)))?;
         
-        Ok(body.into_bytes().to_vec())
+        Ok(content.to_bytes().to_vec())
     }
     
     async fn file_exists(&self, key: &str) -> Result<bool> {
         match self.client
-            .head_object()
-            .bucket(&self.bucket)
-            .key(key)
+            .stat_object(&self.bucket, key)
             .send()
             .await
         {
@@ -124,9 +131,7 @@ impl FileStorage for S3Storage {
     
     async fn delete_file(&self, key: &str) -> Result<()> {
         self.client
-            .delete_object()
-            .bucket(&self.bucket)
-            .key(key)
+            .delete_object(&self.bucket, key)
             .send()
             .await
             .map_err(|e| RegistryError::Storage(format!("Failed to delete file '{}': {}", key, e)))?;
@@ -136,34 +141,21 @@ impl FileStorage for S3Storage {
     
     async fn list_files(&self, prefix: &str) -> Result<Vec<String>> {
         let mut keys = Vec::new();
-        let mut continuation_token: Option<String> = None;
+        let mut stream = self.client
+            .list_objects(&self.bucket)
+            .prefix(Some(prefix.to_string()))
+            .recursive(true)
+            .to_stream()
+            .await;
         
-        loop {
-            let mut request = self.client
-                .list_objects_v2()
-                .bucket(&self.bucket)
-                .prefix(prefix);
-            
-            if let Some(token) = continuation_token {
-                request = request.continuation_token(token);
-            }
-            
-            let response = request.send().await
-                .map_err(|e| RegistryError::Storage(format!("Failed to list files with prefix '{}': {}", prefix, e)))?;
-            
-            if let Some(contents) = response.contents {
-                for object in contents {
-                    if let Some(key) = object.key {
-                        keys.push(key);
-                    }
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(item) => {
+                    keys.push(item.name);
                 }
-            }
-            
-            // Check if there are more objects to fetch
-            if response.is_truncated.unwrap_or(false) {
-                continuation_token = response.next_continuation_token;
-            } else {
-                break;
+                Err(e) => {
+                    return Err(RegistryError::Storage(format!("Failed to list files with prefix '{}': {}", prefix, e)));
+                }
             }
         }
         

@@ -79,6 +79,37 @@ for customer in customers {
 cached_template.clear_cache()?;
 ```
 
+## Manual Testing with SQLite + S3
+
+For testing the registry system with real storage backends:
+
+1. **Start MinIO (S3-compatible storage):**
+   ```bash
+   docker-compose up -d
+   ```
+
+2. **Set up environment:**
+   ```bash
+   cp .env.example .env
+   # Edit .env if needed for custom configuration
+   ```
+
+3. **Run manual test:**
+   ```bash
+   cd crates/papermake-registry
+   cargo run --example manual_test --features sqlite,s3
+   ```
+
+4. **Browse stored data:**
+   - MinIO Console: http://localhost:9001 (minioadmin/minioadmin)
+   - Check the `papermake-dev` bucket for stored templates and assets
+   - SQLite database: `./data/papermake.db` (use any SQLite browser)
+
+5. **Stop services:**
+   ```bash
+   docker-compose down
+   ```
+
 ## Documentation
 
 For more detailed documentation and examples, please visit our documentation (coming soon).

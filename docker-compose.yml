@@ -1,0 +1,47 @@
+services:
+
+  # MinIO S3-compatible object storage
+  minio:
+    image: minio/minio:latest
+    container_name: papermake-minio
+    ports:
+      - "9000:9000"  # API
+      - "9001:9001"  # Console
+    volumes:
+      - minio_data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    restart: unless-stopped
+    networks:
+      - papermake
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MinIO client for bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: papermake-minio-init
+    depends_on:
+      - minio
+    networks:
+      - papermake
+    entrypoint: >
+      /bin/sh -c "
+      sleep 10;
+      mc alias set minio http://minio:9000 minioadmin minioadmin;
+      mc mb minio/papermake-dev --ignore-existing;
+      mc mb minio/papermake-test --ignore-existing;
+      echo 'Buckets created successfully';
+      "
+
+volumes:
+  minio_data:
+
+networks:
+  papermake:
+    driver: bridge
