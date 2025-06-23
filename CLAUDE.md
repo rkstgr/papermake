@@ -154,3 +154,4 @@ When using PostgreSQL storage:
 - **NEVER** include Claude or AI assistant attributions in commit messages
 - Keep commit messages focused on the technical changes made
 - Use conventional commit format: `type: description`
+- Prefer concise, less verbose commit messages that explain the core change

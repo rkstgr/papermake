@@ -564,8 +564,8 @@ impl MetadataStorage for SqliteStorage {
 
     async fn list_all_render_jobs(&self) -> Result<Vec<RenderJob>> {
         let rows = sqlx::query(
-            "SELECT id, template_id, template_version, data, data_hash, 
-                    pdf_s3_key, created_at, completed_at, rendering_latency
+            "SELECT id, template_id, version, data_hash, status, 
+                    created_at, completed_at, error_message
              FROM render_jobs 
              ORDER BY created_at DESC"
         )
@@ -576,40 +576,49 @@ impl MetadataStorage for SqliteStorage {
         let mut jobs = Vec::new();
         for row in rows {
             let template_id = TemplateId::from(row.get::<String, _>("template_id"));
-            let data_str: String = row.get("data");
-            let data: serde_json::Value = serde_json::from_str(&data_str)
-                .map_err(|e| RegistryError::Storage(format!("Failed to parse render job data: {}", e)))?;
+            
+            // Parse timestamps
+            let created_at_str: String = row.get("created_at");
+            let created_at = time::OffsetDateTime::parse(
+                &created_at_str,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .map_err(|e| RegistryError::Storage(format!("Failed to parse created timestamp: {}", e)))?;
 
-            let created_at_ts: i64 = row.get("created_at");
-            let created_at = OffsetDateTime::from_unix_timestamp(created_at_ts)
-                .unwrap_or_else(|_| OffsetDateTime::now_utc());
+            let completed_at = if let Some(completed_at_str) = row.get::<Option<String>, _>("completed_at") {
+                Some(
+                    time::OffsetDateTime::parse(
+                        &completed_at_str,
+                        &time::format_description::well_known::Rfc3339,
+                    )
+                    .map_err(|e| RegistryError::Storage(format!("Failed to parse completed timestamp: {}", e)))?
+                )
+            } else {
+                None
+            };
 
-            let completed_at = row.get::<Option<i64>, _>("completed_at")
-                .map(|ts| OffsetDateTime::from_unix_timestamp(ts)
-                    .unwrap_or_else(|_| OffsetDateTime::now_utc()));
-
-            let pdf_s3_key: Option<String> = row.get("pdf_s3_key");
+            // Parse status
+            let status_str: String = row.get("status");
+            let status = match status_str.as_str() {
+                "Pending" => RenderStatus::Pending,
+                "InProgress" => RenderStatus::InProgress,
+                "Completed" => RenderStatus::Completed,
+                "Failed" => RenderStatus::Failed,
+                _ => RenderStatus::Pending, // Default fallback
+            };
 
             let job = RenderJob {
                 id: row.get("id"),
                 template_id,
-                template_version: row.get::<i64, _>("template_version") as u64,
-                data,
+                template_version: row.get::<i64, _>("version") as u64,
+                data: serde_json::Value::Null, // TODO: Store actual data if needed
                 data_hash: row.get("data_hash"),
-                status: if completed_at.is_some() {
-                    if pdf_s3_key.is_some() {
-                        RenderStatus::Completed
-                    } else {
-                        RenderStatus::Failed
-                    }
-                } else {
-                    RenderStatus::Pending
-                },
-                pdf_s3_key,
-                rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
+                status,
+                pdf_s3_key: None, // TODO: Store this in database
+                rendering_latency: None, // TODO: Store this in database
                 created_at,
                 completed_at,
-                error_message: None, // TODO: Store this in database if needed
+                error_message: row.get("error_message"),
             };
 
             jobs.push(job);

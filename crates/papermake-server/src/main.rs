@@ -112,7 +112,7 @@ fn api_routes() -> Router<AppState> {
         .nest("/renders", routes::renders::router())
         .nest("/analytics", routes::analytics::router())
         // WebSocket endpoint
-        .route("/ws/renders/:render_id", get(routes::websocket::render_status_ws))
+        .route("/ws/renders/{render_id}", get(routes::websocket::render_status_ws))
 }
 
 /// Static file routes

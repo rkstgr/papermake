@@ -24,9 +24,9 @@ use tracing::{debug, error, info};
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_templates).post(create_template))
-        .route("/:template_id", get(get_template))
-        .route("/:template_id/versions", get(list_template_versions))
-        .route("/:template_id/versions/:version", get(get_template_version))
+        .route("/{template_id}", get(get_template))
+        .route("/{template_id}/versions", get(list_template_versions))
+        .route("/{template_id}/versions/{version}", get(get_template_version))
         .route("/preview", post(preview_template))
         .route("/validate", post(validate_template))
 }

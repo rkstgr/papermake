@@ -24,7 +24,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/dashboard", get(get_dashboard_metrics))
         .route("/templates/usage", get(get_template_usage))
-        .route("/templates/:template_id/analytics", get(get_template_analytics))
+        .route("/templates/{template_id}/analytics", get(get_template_analytics))
         .route("/performance", get(get_performance_metrics))
         .route("/health", get(get_system_health))
 }

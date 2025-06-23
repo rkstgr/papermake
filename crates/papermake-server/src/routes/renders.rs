@@ -24,9 +24,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_renders).post(create_render))
         .route("/batch", post(create_batch_render))
-        .route("/:render_id", get(get_render))
-        .route("/:render_id/pdf", get(download_pdf))
-        .route("/:render_id/retry", post(retry_render))
+        .route("/{render_id}", get(get_render))
+        .route("/{render_id}/pdf", get(download_pdf))
+        .route("/{render_id}/retry", post(retry_render))
 }
 
 /// List render jobs with pagination and filtering
