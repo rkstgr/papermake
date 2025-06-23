@@ -2,9 +2,9 @@
 
 Papermake is a fast PDF generation service built in Rust using [Typst](https://github.com/typst/typst) as the rendering engine. Generate PDFs via HTTP API or embed the core library directly in your applications.
 
-**🚀 Fast**: From request to PDF in under 20ms. That's 100x faster than traditional PDF generation methods.
-**📐 Type-safe**: Schema validation with JSON data binding
-**🔧 Production-ready**: Template versioning, background workers, and S3 storage
+* **🚀 Fast**: From request to PDF in under 20ms. That's 100x faster than traditional PDF generation methods.
+* **📐 Type-safe**: Schema validation with JSON data binding
+* **🔧 Production-ready**: Template versioning, background workers, and S3 storage
 
 ⚠️ **Early Development**: APIs and features are subject to change.
 
