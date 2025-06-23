@@ -26,7 +26,7 @@ mod routes;
 mod services;
 
 use config::ServerConfig;
-use error::{ApiError, Result};
+use error::Result;
 
 /// Main application state
 #[derive(Clone)]

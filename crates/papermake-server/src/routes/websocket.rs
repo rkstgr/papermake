@@ -14,9 +14,8 @@ use axum::{
     response::Response,
 };
 use futures::{sink::SinkExt, stream::StreamExt};
-use std::sync::Arc;
 use tokio::time::{Duration, interval};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 /// WebSocket endpoint for render job status updates
 pub async fn render_status_ws(

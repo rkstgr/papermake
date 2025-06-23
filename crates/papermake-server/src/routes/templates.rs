@@ -4,7 +4,7 @@ use crate::{
     error::{ApiError, Result},
     models::{
         ApiResponse, PaginatedResponse, TemplateDetails, TemplateSummary, CreateTemplateRequest,
-        UpdateTemplateRequest, TemplatePreviewRequest, TemplateValidationRequest,
+        TemplatePreviewRequest, TemplateValidationRequest,
         TemplateValidationResponse, SearchQuery,
     },
     AppState,
@@ -18,7 +18,6 @@ use axum::{
 };
 use papermake::TemplateBuilder;
 use papermake_registry::{TemplateId, TemplateRegistry};
-use std::sync::Arc;
 use tracing::{debug, error, info};
 
 /// Create template routes
@@ -111,7 +110,7 @@ async fn create_template(
         .name(request.name)
         .description(request.description.unwrap_or_default())
         .content(request.content)
-        .schema(request.schema.unwrap_or(serde_json::Value::Null))
+        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
         .build()
         .map_err(|e| ApiError::validation(&e.to_string()))?;
 
@@ -154,7 +153,7 @@ async fn get_template_version(
 
 /// Preview a template without storing it
 async fn preview_template(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Json(request): Json<TemplatePreviewRequest>,
 ) -> Result<Response> {
     debug!("Previewing template");
@@ -163,7 +162,7 @@ async fn preview_template(
     let template = TemplateBuilder::new("preview".into())
         .name("Preview")
         .content(request.content)
-        .schema(request.schema.unwrap_or(serde_json::Value::Null))
+        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
         .build()
         .map_err(|e| ApiError::validation(&e.to_string()))?;
 
@@ -199,7 +198,7 @@ async fn validate_template(
         .content(request.content);
 
     if let Some(schema) = request.schema {
-        builder = builder.schema(schema);
+        builder = builder.schema(papermake::Schema::from_value(schema));
     }
 
     let template_result = builder.build();

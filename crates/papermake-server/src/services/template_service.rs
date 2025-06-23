@@ -1,6 +1,5 @@
 //! Template service business logic
 
-use crate::error::Result;
 use papermake_registry::DefaultRegistry;
 use std::sync::Arc;
 

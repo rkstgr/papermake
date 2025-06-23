@@ -15,10 +15,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use papermake_registry::{TemplateId, TemplateRegistry};
-use std::sync::Arc;
-use time::OffsetDateTime;
-use tracing::{debug, error, info, warn};
+use papermake_registry::TemplateRegistry;
+use tracing::{debug, error, info};
 use uuid::Uuid;
 
 /// Create render routes
@@ -164,7 +162,7 @@ async fn get_render(
         status,
         created_at: job.created_at,
         completed_at: job.completed_at,
-        rendering_latency: job.rendering_latency,
+        rendering_latency: job.rendering_latency.map(|l| l as i64),
         pdf_url: job.pdf_s3_key.as_ref().map(|_| format!("/api/renders/{}/pdf", job.id)),
         error_message: None, // Could be stored in the future
     };
@@ -192,7 +190,7 @@ async fn download_pdf(
     // Get PDF data from S3 storage
     // Note: We need to access the file storage directly here
     // This is a bit of a hack - in production we might want a dedicated service
-    let file_storage = &state.registry.file_storage;
+    let file_storage = state.registry.file_storage();
     let pdf_data = file_storage.get_file(&pdf_key).await?;
 
     // Generate filename

@@ -9,6 +9,12 @@ use crate::schema::Schema;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct TemplateId(pub String);
 
+impl std::fmt::Display for TemplateId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl From<String> for TemplateId {
     fn from(s: String) -> Self {
         TemplateId(s)

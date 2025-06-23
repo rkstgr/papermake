@@ -15,8 +15,7 @@ use axum::{
     routing::get,
     Router,
 };
-use papermake_registry::TemplateId;
-use std::sync::Arc;
+use papermake_registry::{TemplateId, TemplateRegistry};
 use time::OffsetDateTime;
 use tracing::debug;
 
@@ -78,7 +77,7 @@ async fn get_dashboard_metrics(
     let p90_latency_ms = if !completed_jobs.is_empty() {
         let mut latencies: Vec<i64> = completed_jobs
             .iter()
-            .filter_map(|job| job.rendering_latency)
+            .filter_map(|job| job.rendering_latency.map(|l| l as i64))
             .collect();
         latencies.sort();
         
@@ -196,7 +195,7 @@ async fn get_template_usage(
         .into_iter()
         .map(|((template_id, version), (count, latencies))| {
             let avg_render_time_ms = if !latencies.is_empty() {
-                Some(latencies.iter().sum::<i64>() as f64 / latencies.len() as f64)
+                Some(latencies.iter().map(|&l| l as u64).sum::<u64>() as f64 / latencies.len() as f64)
             } else {
                 None
             };
@@ -230,7 +229,7 @@ async fn get_template_usage(
 async fn get_template_analytics(
     State(state): State<AppState>,
     Path(template_id): Path<TemplateId>,
-    Query(query): Query<AnalyticsQuery>,
+    Query(_query): Query<AnalyticsQuery>,
 ) -> Result<Json<ApiResponse<TemplateAnalytics>>> {
     debug!("Getting analytics for template: {}", template_id);
 
@@ -261,7 +260,7 @@ async fn get_template_analytics(
 
     let latencies: Vec<i64> = template_jobs
         .iter()
-        .filter_map(|job| job.rendering_latency)
+        .filter_map(|job| job.rendering_latency.map(|l| l as i64))
         .collect();
 
     let avg_render_time_ms = if !latencies.is_empty() {
@@ -300,7 +299,7 @@ async fn get_template_analytics(
     let usage_over_time = vec![]; // Would implement time-series grouping
 
     let analytics = TemplateAnalytics {
-        template_id,
+        template_id: template_id.clone(),
         template_name: template_id.to_string(), // Would get from registry
         total_versions: versions.len() as u64,
         latest_version,
@@ -313,7 +312,7 @@ async fn get_template_analytics(
 
 /// Get performance metrics over time
 async fn get_performance_metrics(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Query(query): Query<AnalyticsQuery>,
 ) -> Result<Json<ApiResponse<PerformanceMetrics>>> {
     debug!("Getting performance metrics with query: {:?}", query);

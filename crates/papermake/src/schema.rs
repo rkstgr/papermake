@@ -40,6 +40,18 @@ impl Schema {
         Schema { fields: Vec::new() }
     }
     
+    /// Create a schema from a JSON value
+    pub fn from_value(value: serde_json::Value) -> Self {
+        // Simple implementation - in production you'd want proper parsing
+        match value {
+            serde_json::Value::Null => Schema::default(),
+            _ => {
+                // Try to deserialize as Schema, fallback to empty schema
+                serde_json::from_value(value).unwrap_or_default()
+            }
+        }
+    }
+    
     /// Create a new schema builder
     pub fn builder() -> SchemaBuilder {
         SchemaBuilder::new()
