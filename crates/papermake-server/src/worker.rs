@@ -2,64 +2,44 @@
 
 use crate::{error::Result, AppState};
 use papermake_registry::{entities::*, TemplateRegistry};
-use std::time::Duration;
-use tokio::time::{interval, Instant};
-use tracing::{debug, error, info, warn};
+use tokio::time::Instant;
+use tracing::{debug, error, info};
 
 /// Background worker that processes pending render jobs
 pub struct RenderWorker {
     state: AppState,
-    poll_interval: Duration,
+    job_receiver: tokio::sync::mpsc::UnboundedReceiver<papermake_registry::entities::RenderJob>,
 }
 
 impl RenderWorker {
     /// Create a new render worker
-    pub fn new(state: AppState, poll_interval: Duration) -> Self {
+    pub fn new(state: AppState, job_receiver: tokio::sync::mpsc::UnboundedReceiver<papermake_registry::entities::RenderJob>) -> Self {
         Self {
             state,
-            poll_interval,
+            job_receiver,
         }
     }
 
     /// Start the worker loop
-    pub async fn start(&self) {
-        info!("Starting render worker with poll interval {:?}", self.poll_interval);
-        let mut interval = interval(self.poll_interval);
+    pub async fn start(mut self) {
+        info!("Starting event-driven render worker");
 
         loop {
-            interval.tick().await;
-            
-            if let Err(e) = self.process_pending_jobs().await {
-                error!("Error processing render jobs: {}", e);
+            // Wait for job from channel
+            match self.job_receiver.recv().await {
+                Some(job) => {
+                    if let Err(e) = self.process_render_job(job).await {
+                        error!("Error processing render job: {}", e);
+                    }
+                }
+                None => {
+                    info!("Job channel closed, shutting down worker");
+                    break;
+                }
             }
         }
     }
 
-    /// Process all pending render jobs
-    async fn process_pending_jobs(&self) -> Result<()> {
-        // Get all render jobs and filter for pending ones
-        let all_jobs = self.state.registry.list_render_jobs().await?;
-        
-        let pending_jobs: Vec<_> = all_jobs
-            .into_iter()
-            .filter(|job| job.status == RenderStatus::Pending)
-            .collect();
-
-        if pending_jobs.is_empty() {
-            debug!("No pending render jobs found");
-            return Ok(());
-        }
-
-        info!("Found {} pending render jobs", pending_jobs.len());
-
-        for job in pending_jobs {
-            if let Err(e) = self.process_render_job(job).await {
-                error!("Failed to process render job: {}", e);
-            }
-        }
-
-        Ok(())
-    }
 
     /// Process a single render job
     async fn process_render_job(&self, mut job: RenderJob) -> Result<()> {
@@ -71,23 +51,26 @@ impl RenderWorker {
         self.state.registry.update_render_job(&job).await?;
 
         // Get the template for this job
+        info!("Processing render job {} for template {}/{}", job.id, job.template_id, job.template_version);
         let template = match self.state.registry.get_template(&job.template_id, job.template_version).await {
             Ok(versioned_template) => versioned_template.template,
             Err(e) => {
-                let error_msg = format!("Failed to get template: {}", e);
-                warn!("{}", error_msg);
+                let error_msg = format!("Failed to get template {}/{}: {}", job.template_id, job.template_version, e);
+                error!("Render job {} failed: {}", job.id, error_msg);
                 job.fail(error_msg);
                 // Save failed job status
                 if let Err(save_err) = self.state.registry.update_render_job(&job).await {
-                    error!("Failed to save job failure status: {}", save_err);
+                    error!("Failed to save job failure status for {}: {}", job.id, save_err);
                 }
                 return Ok(());
             }
         };
 
         // Render the PDF
+        debug!("Rendering PDF for job {} with data: {:?}", job.id, job.data);
         match self.render_pdf(&template, &job.data).await {
             Ok(pdf_data) => {
+                info!("Successfully rendered PDF for job {} ({} bytes)", job.id, pdf_data.len());
                 // Generate S3 key for the PDF
                 let s3_key = format!("renders/{}/{}.pdf", job.template_id.as_ref(), job.id);
                 
@@ -100,14 +83,14 @@ impl RenderWorker {
                     }
                     Err(e) => {
                         let error_msg = format!("Failed to store PDF: {}", e);
-                        error!("{}", error_msg);
+                        error!("Render job {} failed during S3 upload: {}", job.id, error_msg);
                         job.fail(error_msg);
                     }
                 }
             }
             Err(e) => {
                 let error_msg = format!("PDF rendering failed: {}", e);
-                error!("{}", error_msg);
+                error!("Render job {} failed: {}", job.id, error_msg);
                 job.fail(error_msg);
             }
         }
@@ -156,9 +139,9 @@ impl RenderWorker {
 }
 
 /// Spawn the render worker in the background
-pub fn spawn_render_worker(state: AppState) {
+pub fn spawn_render_worker(state: AppState, job_receiver: tokio::sync::mpsc::UnboundedReceiver<papermake_registry::entities::RenderJob>) {
     tokio::spawn(async move {
-        let worker = RenderWorker::new(state, Duration::from_secs(5)); // Poll every 5 seconds
+        let worker = RenderWorker::new(state, job_receiver);
         worker.start().await;
     });
 }

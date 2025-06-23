@@ -40,7 +40,11 @@ async fn list_templates(
 
     // For now, get all templates and apply basic filtering
     // In production, this should be done at the database level
-    let templates = state.registry.list_templates().await?;
+    let templates = state.registry.list_templates().await
+        .map_err(|e| {
+            error!("Failed to list templates: {}", e);
+            e
+        })?;
     
     // Apply search filter if provided
     let filtered_templates: Vec<_> = if let Some(search_term) = &query.search {

@@ -11,7 +11,9 @@ pub struct RenderJobSummary {
     pub template_id: TemplateId,
     pub template_version: u64,
     pub status: RenderStatus,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<OffsetDateTime>,
     pub rendering_latency: Option<i64>,
     pub pdf_url: Option<String>,
@@ -53,7 +55,9 @@ pub struct RenderJobDetails {
     pub data: serde_json::Value,
     pub data_hash: String,
     pub status: RenderStatus,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<OffsetDateTime>,
     pub rendering_latency: Option<i64>,
     pub pdf_url: Option<String>,
@@ -97,7 +101,9 @@ pub struct RenderOptions {
 pub struct CreateRenderResponse {
     pub id: String,
     pub status: RenderStatus,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub estimated_completion: Option<OffsetDateTime>,
 }
 
@@ -141,6 +147,7 @@ pub struct RenderJobUpdate {
     pub status: RenderStatus,
     pub progress: Option<f32>, // 0.0 to 1.0
     pub message: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<OffsetDateTime>,
     pub pdf_url: Option<String>,
 }

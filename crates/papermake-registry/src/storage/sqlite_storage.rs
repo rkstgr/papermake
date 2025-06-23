@@ -6,8 +6,7 @@
 use super::MetadataStorage;
 use crate::{RegistryError, entities::*, error::Result};
 use async_trait::async_trait;
-use papermake::{TemplateId, Schema, Template};
-use time::OffsetDateTime;
+use papermake::TemplateId;
 use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
 use std::str::FromStr;
 
@@ -71,8 +70,11 @@ impl SqliteStorage {
                 id TEXT PRIMARY KEY,
                 template_id TEXT NOT NULL,
                 version INTEGER NOT NULL,
+                data TEXT NOT NULL,
                 data_hash TEXT NOT NULL,
                 status TEXT NOT NULL,
+                pdf_s3_key TEXT,
+                rendering_latency INTEGER,
                 created_at TEXT NOT NULL,
                 completed_at TEXT,
                 error_message TEXT
@@ -84,6 +86,17 @@ impl SqliteStorage {
         .map_err(|e| {
             RegistryError::Storage(format!("Failed to create render_jobs table: {}", e))
         })?;
+
+        // Add missing columns if they don't exist (migration)
+        let _ = sqlx::query("ALTER TABLE render_jobs ADD COLUMN data TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE render_jobs ADD COLUMN pdf_s3_key TEXT")
+            .execute(&self.pool)
+            .await;
+        let _ = sqlx::query("ALTER TABLE render_jobs ADD COLUMN rendering_latency INTEGER")
+            .execute(&self.pool)
+            .await;
 
         // Create indexes for efficient queries
         sqlx::query(
@@ -264,19 +277,24 @@ impl MetadataStorage for SqliteStorage {
             })?;
 
         let status_str = format!("{:?}", job.status);
+        let data_json = serde_json::to_string(&job.data)
+            .map_err(|e| RegistryError::Storage(format!("Failed to serialize data: {}", e)))?;
 
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO render_jobs
-            (id, template_id, version, data_hash, status, created_at, completed_at, error_message)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (id, template_id, version, data, data_hash, status, pdf_s3_key, rendering_latency, created_at, completed_at, error_message)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         )
         .bind(&job.id)
         .bind(job.template_id.as_ref())
         .bind(job.template_version as i64)
+        .bind(data_json)
         .bind(&job.data_hash)
         .bind(status_str)
+        .bind(&job.pdf_s3_key)
+        .bind(job.rendering_latency.map(|l| l as i64))
         .bind(created_at)
         .bind(completed_at)
         .bind(&job.error_message)
@@ -289,7 +307,7 @@ impl MetadataStorage for SqliteStorage {
 
     async fn get_render_job(&self, job_id: &str) -> Result<RenderJob> {
         let row = sqlx::query(r#"
-            SELECT id, template_id, version, data_hash, status, created_at, completed_at, error_message
+            SELECT id, template_id, version, data, data_hash, status, pdf_s3_key, rendering_latency, created_at, completed_at, error_message
             FROM render_jobs
             WHERE id = ?
         "#)
@@ -333,15 +351,19 @@ impl MetadataStorage for SqliteStorage {
             _ => RenderStatus::Pending, // Default fallback
         };
 
+        let data_json: String = row.get("data");
+        let data = serde_json::from_str(&data_json)
+            .map_err(|e| RegistryError::Storage(format!("Failed to deserialize data: {}", e)))?;
+
         Ok(RenderJob {
             id: row.get("id"),
             template_id: TemplateId::from(row.get::<String, _>("template_id")),
             template_version: row.get::<i64, _>("version") as u64,
-            data: serde_json::Value::Null, // TODO: Store actual data if needed
+            data,
             data_hash: row.get("data_hash"),
             status,
-            pdf_s3_key: None, // TODO: Store this in database
-            rendering_latency: None, // TODO: Store this in database
+            pdf_s3_key: row.get("pdf_s3_key"),
+            rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
             created_at,
             completed_at,
             error_message: row.get("error_message"),
@@ -355,7 +377,7 @@ impl MetadataStorage for SqliteStorage {
         data_hash: &str,
     ) -> Result<Option<RenderJob>> {
         let row = sqlx::query(r#"
-            SELECT id, template_id, version, data_hash, status, created_at, completed_at, error_message
+            SELECT id, template_id, version, data, data_hash, status, pdf_s3_key, rendering_latency, created_at, completed_at, error_message
             FROM render_jobs
             WHERE template_id = ? AND version = ? AND data_hash = ?
             ORDER BY created_at DESC
@@ -405,15 +427,19 @@ impl MetadataStorage for SqliteStorage {
                 _ => RenderStatus::Pending,
             };
 
+            let data_json: String = row.get("data");
+            let data = serde_json::from_str(&data_json)
+                .map_err(|e| RegistryError::Storage(format!("Failed to deserialize data: {}", e)))?;
+
             Ok(Some(RenderJob {
                 id: row.get("id"),
                 template_id: TemplateId::from(row.get::<String, _>("template_id")),
                 template_version: row.get::<i64, _>("version") as u64,
-                data: serde_json::Value::Null, // TODO: Store actual data if needed
+                data,
                 data_hash: row.get("data_hash"),
                 status,
-                pdf_s3_key: None, // TODO: Store this in database
-                rendering_latency: None, // TODO: Store this in database
+                pdf_s3_key: row.get("pdf_s3_key"),
+                rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
                 created_at,
                 completed_at,
                 error_message: row.get("error_message"),
@@ -430,7 +456,7 @@ impl MetadataStorage for SqliteStorage {
     ) -> Result<Vec<RenderJob>> {
         let rows = if let Some(version) = version {
             sqlx::query(r#"
-                SELECT id, template_id, version, data_hash, status, created_at, completed_at, error_message
+                SELECT id, template_id, version, data, data_hash, status, pdf_s3_key, rendering_latency, created_at, completed_at, error_message
                 FROM render_jobs
                 WHERE template_id = ? AND version = ?
                 ORDER BY created_at DESC
@@ -441,7 +467,7 @@ impl MetadataStorage for SqliteStorage {
             .await
         } else {
             sqlx::query(r#"
-                SELECT id, template_id, version, data_hash, status, created_at, completed_at, error_message
+                SELECT id, template_id, version, data, data_hash, status, pdf_s3_key, rendering_latency, created_at, completed_at, error_message
                 FROM render_jobs
                 WHERE template_id = ?
                 ORDER BY created_at DESC
@@ -492,15 +518,19 @@ impl MetadataStorage for SqliteStorage {
                 _ => RenderStatus::Pending,
             };
 
+            let data_json: String = row.get("data");
+            let data = serde_json::from_str(&data_json)
+                .map_err(|e| RegistryError::Storage(format!("Failed to deserialize data: {}", e)))?;
+
             jobs.push(RenderJob {
                 id: row.get("id"),
                 template_id: TemplateId::from(row.get::<String, _>("template_id")),
                 template_version: row.get::<i64, _>("version") as u64,
-                data: serde_json::Value::Null, // TODO: Store actual data if needed
+                data,
                 data_hash: row.get("data_hash"),
                 status,
-                pdf_s3_key: None, // TODO: Store this in database
-                rendering_latency: None, // TODO: Store this in database
+                pdf_s3_key: row.get("pdf_s3_key"),
+                rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
                 created_at,
                 completed_at,
                 error_message: row.get("error_message"),
@@ -512,15 +542,14 @@ impl MetadataStorage for SqliteStorage {
 
     async fn list_all_templates(&self) -> Result<Vec<VersionedTemplate>> {
         let rows = sqlx::query(
-            "SELECT template_id, version, template_name, template_description, 
-                    template_content, template_schema, author, published_at
+            "SELECT template_id, version, author, created_at, template_data
              FROM versioned_templates 
              WHERE (template_id, version) IN (
                  SELECT template_id, MAX(version) 
                  FROM versioned_templates 
                  GROUP BY template_id
              )
-             ORDER BY published_at DESC"
+             ORDER BY created_at DESC"
         )
         .fetch_all(&self.pool)
         .await
@@ -528,23 +557,17 @@ impl MetadataStorage for SqliteStorage {
 
         let mut templates = Vec::new();
         for row in rows {
-            let template_id = TemplateId::from(row.get::<String, _>("template_id"));
-            let schema_str: String = row.get::<Option<String>, _>("template_schema").unwrap_or_default();
-            let schema: Schema = serde_json::from_str(&schema_str).unwrap_or_default();
+            let template_json: String = row.get("template_data");
+            let template = serde_json::from_str(&template_json).map_err(|e| {
+                RegistryError::Storage(format!("Failed to deserialize template: {}", e))
+            })?;
 
-            let published_at_ts: i64 = row.get("published_at");
-            let published_at = OffsetDateTime::from_unix_timestamp(published_at_ts)
-                .unwrap_or_else(|_| OffsetDateTime::now_utc());
-
-            let template = Template {
-                id: template_id,
-                name: row.get("template_name"),
-                description: row.get("template_description"),
-                content: row.get("template_content"),
-                schema,
-                created_at: published_at,
-                updated_at: published_at,
-            };
+            let published_at_str: String = row.get("created_at");
+            let published_at = time::OffsetDateTime::parse(
+                &published_at_str,
+                &time::format_description::well_known::Rfc3339,
+            )
+            .map_err(|e| RegistryError::Storage(format!("Failed to parse timestamp: {}", e)))?;
 
             let versioned_template = VersionedTemplate {
                 template,
@@ -564,8 +587,8 @@ impl MetadataStorage for SqliteStorage {
 
     async fn list_all_render_jobs(&self) -> Result<Vec<RenderJob>> {
         let rows = sqlx::query(
-            "SELECT id, template_id, version, data_hash, status, 
-                    created_at, completed_at, error_message
+            "SELECT id, template_id, version, data, data_hash, status, 
+                    pdf_s3_key, rendering_latency, created_at, completed_at, error_message
              FROM render_jobs 
              ORDER BY created_at DESC"
         )
@@ -607,15 +630,19 @@ impl MetadataStorage for SqliteStorage {
                 _ => RenderStatus::Pending, // Default fallback
             };
 
+            let data_json: String = row.get("data");
+            let data = serde_json::from_str(&data_json)
+                .map_err(|e| RegistryError::Storage(format!("Failed to deserialize data: {}", e)))?;
+
             let job = RenderJob {
                 id: row.get("id"),
                 template_id,
                 template_version: row.get::<i64, _>("version") as u64,
-                data: serde_json::Value::Null, // TODO: Store actual data if needed
+                data,
                 data_hash: row.get("data_hash"),
                 status,
-                pdf_s3_key: None, // TODO: Store this in database
-                rendering_latency: None, // TODO: Store this in database
+                pdf_s3_key: row.get("pdf_s3_key"),
+                rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
                 created_at,
                 completed_at,
                 error_message: row.get("error_message"),

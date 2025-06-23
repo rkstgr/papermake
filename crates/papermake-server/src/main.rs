@@ -34,6 +34,7 @@ use error::Result;
 pub struct AppState {
     pub registry: Arc<DefaultRegistry>,
     pub config: ServerConfig,
+    pub job_sender: tokio::sync::mpsc::UnboundedSender<papermake_registry::entities::RenderJob>,
 }
 
 #[tokio::main]
@@ -65,11 +66,18 @@ async fn main() -> Result<()> {
     // Create registry
     let registry = Arc::new(DefaultRegistry::new(sqlite_storage, s3_storage));
 
+    // Create job channel for event-driven processing
+    let (job_sender, job_receiver) = tokio::sync::mpsc::unbounded_channel();
+
     // Create application state
-    let state = AppState { registry, config: config.clone() };
+    let state = AppState { 
+        registry, 
+        config: config.clone(),
+        job_sender,
+    };
 
     // Start background render worker
-    worker::spawn_render_worker(state.clone());
+    worker::spawn_render_worker(state.clone(), job_receiver);
     info!("🔧 Background render worker started");
 
     // Build router

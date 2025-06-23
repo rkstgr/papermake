@@ -124,6 +124,12 @@ async fn create_render(
         .render_template(&request.template_id, request.template_version, &request.data)
         .await?;
 
+    // Send job to worker for immediate processing
+    if let Err(e) = state.job_sender.send(render_job.clone()) {
+        error!("Failed to send job to worker: {}", e);
+        return Err(ApiError::internal("Failed to queue render job"));
+    }
+
     let response = CreateRenderResponse {
         id: render_job.id.clone(),
         status: RenderStatus::Queued,
@@ -229,6 +235,12 @@ async fn retry_render(
         .render_template(&job.template_id, job.template_version, &job.data)
         .await?;
 
+    // Send job to worker for immediate processing
+    if let Err(e) = state.job_sender.send(new_job.clone()) {
+        error!("Failed to send retry job to worker: {}", e);
+        return Err(ApiError::internal("Failed to queue retry job"));
+    }
+
     let response = CreateRenderResponse {
         id: new_job.id,
         status: RenderStatus::Queued,
@@ -265,12 +277,18 @@ async fn create_batch_render(
             .await
         {
             Ok(job) => {
-                render_jobs.push(CreateRenderResponse {
-                    id: job.id,
-                    status: RenderStatus::Queued,
-                    created_at: job.created_at,
-                    estimated_completion: None,
-                });
+                // Send job to worker for immediate processing
+                if let Err(e) = state.job_sender.send(job.clone()) {
+                    error!("Failed to send batch job to worker: {}", e);
+                    // Continue with other jobs rather than failing the entire batch
+                } else {
+                    render_jobs.push(CreateRenderResponse {
+                        id: job.id,
+                        status: RenderStatus::Queued,
+                        created_at: job.created_at,
+                        estimated_completion: None,
+                    });
+                }
             }
             Err(e) => {
                 error!("Failed to create render job in batch: {}", e);
