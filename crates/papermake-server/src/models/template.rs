@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 pub struct TemplateSummary {
     pub id: TemplateId,
     pub name: String,
-    pub latest_version: u64,
+    pub latest_version: String,
     pub uses_24h: u64,
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
@@ -24,7 +24,7 @@ pub struct TemplateDetails {
     pub description: Option<String>,
     pub content: String,
     pub schema: Option<serde_json::Value>,
-    pub version: u64,
+    pub version: String,
     pub author: String,
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
@@ -59,7 +59,7 @@ impl From<VersionedTemplate> for TemplateDetails {
 /// Template version information
 #[derive(Debug, Serialize)]
 pub struct TemplateVersion {
-    pub version: u64,
+    pub version: String,
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
     pub author: String,

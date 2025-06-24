@@ -94,7 +94,7 @@ async fn get_dashboard_metrics(
     // Get popular templates (simplified - count by template_id in last 24h)
     let mut template_usage_map = std::collections::HashMap::new();
     for job in &jobs_24h {
-        let key = (&job.template_id, job.template_version);
+        let key = (&job.template_id, job.template_version.clone());
         *template_usage_map.entry(key).or_insert(0) += 1;
     }
 
@@ -181,7 +181,7 @@ async fn get_template_usage(
     // Group by template and calculate usage
     let mut usage_map = std::collections::HashMap::new();
     for job in filtered_jobs {
-        let key = (&job.template_id, job.template_version);
+        let key = (&job.template_id, job.template_version.clone());
         let entry = usage_map.entry(key).or_insert_with(|| {
             (0i64, Vec::new()) // (count, latencies)
         });
@@ -302,7 +302,7 @@ async fn get_template_analytics(
         template_id: template_id.clone(),
         template_name: template_id.to_string(), // Would get from registry
         total_versions: versions.len() as u64,
-        latest_version,
+        latest_version: format!("v{}", latest_version),
         usage_over_time,
         performance_metrics,
     };

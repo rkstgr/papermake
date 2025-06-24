@@ -19,6 +19,15 @@ use papermake_registry::TemplateRegistry;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
+/// Helper function to parse version string to u64 for legacy compatibility
+fn parse_version_to_u64(version: &str) -> u64 {
+    if let Some(v) = version.strip_prefix('v') {
+        v.parse().unwrap_or(1)
+    } else {
+        version.parse().unwrap_or(1)
+    }
+}
+
 /// Create render routes
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -121,7 +130,7 @@ async fn create_render(
     // Create render job through registry
     let render_job = state
         .registry
-        .render_template(&request.template_id, request.template_version, &request.data)
+        .render_template(&request.template_id, parse_version_to_u64(&request.template_version), &request.data)
         .await?;
 
     // Send job to worker for immediate processing
@@ -232,7 +241,7 @@ async fn retry_render(
     // Create a new render job with the same parameters
     let new_job = state
         .registry
-        .render_template(&job.template_id, job.template_version, &job.data)
+        .render_template(&job.template_id, parse_version_to_u64(&job.template_version), &job.data)
         .await?;
 
     // Send job to worker for immediate processing
@@ -273,7 +282,7 @@ async fn create_batch_render(
     for req in request.requests {
         match state
             .registry
-            .render_template(&req.template_id, req.template_version, &req.data)
+            .render_template(&req.template_id, parse_version_to_u64(&req.template_version), &req.data)
             .await
         {
             Ok(job) => {

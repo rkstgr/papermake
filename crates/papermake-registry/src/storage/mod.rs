@@ -36,21 +36,51 @@ pub trait MetadataStorage: Send + Sync {
     /// Save a versioned template
     async fn save_versioned_template(&self, template: &VersionedTemplate) -> Result<()>;
 
-    /// Get a specific version of a template
+    /// Get a specific version of a template by name:version
+    async fn get_versioned_template_by_name(
+        &self,
+        template_name: &str,
+        version: &str,
+    ) -> Result<VersionedTemplate>;
+
+    /// Get a specific version of a template by ID (for backward compatibility)
     async fn get_versioned_template(
         &self,
         id: &papermake::TemplateId,
         version: u64,
     ) -> Result<VersionedTemplate>;
 
-    /// List all versions for a template
+    /// List all versions for a template by name
+    async fn list_template_versions_by_name(&self, template_name: &str) -> Result<Vec<String>>;
+
+    /// List all versions for a template by ID (for backward compatibility)
     async fn list_template_versions(&self, id: &papermake::TemplateId) -> Result<Vec<u64>>;
 
-    /// Delete a specific template version
+    /// Delete a specific template version by name:version
+    async fn delete_template_version_by_name(&self, template_name: &str, version: &str) -> Result<()>;
+
+    /// Delete a specific template version by ID (for backward compatibility)
     async fn delete_template_version(&self, id: &papermake::TemplateId, version: u64) -> Result<()>;
 
     /// Search templates by name/description
     async fn search_templates(&self, query: &str) -> Result<Vec<(papermake::TemplateId, u64)>>;
+
+    // === Draft Management ===
+
+    /// Save a draft template
+    async fn save_draft(&self, template: &VersionedTemplate) -> Result<()>;
+
+    /// Get a draft template by name
+    async fn get_draft(&self, template_name: &str) -> Result<Option<VersionedTemplate>>;
+
+    /// Delete a draft template
+    async fn delete_draft(&self, template_name: &str) -> Result<()>;
+
+    /// Check if a template has a draft
+    async fn has_draft(&self, template_name: &str) -> Result<bool>;
+
+    /// Get the latest published version number for auto-incrementing
+    async fn get_next_version_number(&self, template_name: &str) -> Result<u64>;
 
     // === Render Job Management ===
 
@@ -60,7 +90,15 @@ pub trait MetadataStorage: Send + Sync {
     /// Get a render job by ID
     async fn get_render_job(&self, job_id: &str) -> Result<RenderJob>;
 
-    /// Find render job by template and data hash (for caching)
+    /// Find render job by template name and data hash (for caching)
+    async fn find_render_job_by_hash_name(
+        &self,
+        template_name: &str,
+        version: &str,
+        data_hash: &str,
+    ) -> Result<Option<RenderJob>>;
+
+    /// Find render job by template ID and data hash (for backward compatibility)
     async fn find_render_job_by_hash(
         &self,
         template_id: &papermake::TemplateId,
@@ -68,7 +106,14 @@ pub trait MetadataStorage: Send + Sync {
         data_hash: &str,
     ) -> Result<Option<RenderJob>>;
 
-    /// List render jobs for a template
+    /// List render jobs for a template by name
+    async fn list_render_jobs_by_name(
+        &self,
+        template_name: &str,
+        version: Option<&str>,
+    ) -> Result<Vec<RenderJob>>;
+
+    /// List render jobs for a template by ID (for backward compatibility)
     async fn list_render_jobs(
         &self,
         template_id: &papermake::TemplateId,

@@ -13,14 +13,20 @@ pub struct VersionedTemplate {
     /// The core template from papermake
     pub template: Template,
 
-    /// Auto-incrementing version number (1, 2, 3...)
-    pub version: u64,
+    /// Machine-readable template name (e.g. "invoice-template")
+    pub template_name: String,
+
+    /// Human-readable display name (e.g. "Monthly Invoice Template")
+    pub display_name: String,
+
+    /// Version string (e.g. "v1", "v2", "latest", "draft")
+    pub version: String,
 
     /// Author of this version (simple string identifier)
     pub author: String,
 
     /// If this template was forked, track the source
-    pub forked_from: Option<(TemplateId, u64)>,
+    pub forked_from: Option<(String, String)>, // Changed to (template_name, version)
 
     /// When this version was published
     #[serde(with = "time::serde::rfc3339")]
@@ -29,20 +35,42 @@ pub struct VersionedTemplate {
     /// Whether this version is immutable (true once published)
     pub immutable: bool,
 
+    /// Whether this is a draft (vs published version)
+    pub is_draft: bool,
+
     /// Schema definition embedded in the template metadata
     pub schema: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl VersionedTemplate {
-    /// Create a new versioned template
-    pub fn new(template: Template, version: u64, author: String) -> Self {
+    /// Create a new published versioned template
+    pub fn new(template: Template, template_name: String, display_name: String, version: String, author: String) -> Self {
         Self {
             template,
+            template_name,
+            display_name,
             version,
             author,
             forked_from: None,
             published_at: OffsetDateTime::now_utc(),
             immutable: true,
+            is_draft: false,
+            schema: None,
+        }
+    }
+
+    /// Create a new draft template
+    pub fn new_draft(template: Template, template_name: String, display_name: String, author: String) -> Self {
+        Self {
+            template,
+            template_name,
+            display_name,
+            version: "draft".to_string(),
+            author,
+            forked_from: None,
+            published_at: OffsetDateTime::now_utc(),
+            immutable: false,
+            is_draft: true,
             schema: None,
         }
     }
@@ -50,24 +78,53 @@ impl VersionedTemplate {
     /// Create a forked template
     pub fn forked_from(
         template: Template,
-        version: u64,
+        template_name: String,
+        display_name: String,
+        version: String,
         author: String,
-        source: (TemplateId, u64),
+        source: (String, String), // (template_name, version)
     ) -> Self {
         Self {
             template,
+            template_name,
+            display_name,
             version,
             author,
             forked_from: Some(source),
             published_at: OffsetDateTime::now_utc(),
             immutable: true,
+            is_draft: false,
             schema: None,
         }
     }
 
-    /// Get the template ID
+    /// Get the template ID (for backward compatibility)
     pub fn id(&self) -> &TemplateId {
         &self.template.id
+    }
+
+    /// Get the template name:version identifier
+    pub fn name_version(&self) -> String {
+        format!("{}:{}", self.template_name, self.version)
+    }
+
+    /// Check if this is the latest version tag
+    pub fn is_latest(&self) -> bool {
+        self.version == "latest"
+    }
+
+    /// Check if this is a draft
+    pub fn is_draft(&self) -> bool {
+        self.is_draft
+    }
+
+    /// Promote draft to published version
+    pub fn publish(mut self, new_version: String) -> Self {
+        self.version = new_version;
+        self.is_draft = false;
+        self.immutable = true;
+        self.published_at = OffsetDateTime::now_utc();
+        self
     }
 
     /// Add schema definition
@@ -83,9 +140,12 @@ pub struct RenderJob {
     /// Unique job identifier
     pub id: String,
 
-    /// Template ID and version used for rendering
+    /// Template identifier - supports both UUID (for backward compatibility) and name
     pub template_id: TemplateId,
-    pub template_version: u64,
+    /// Template name (e.g. "invoice-template")
+    pub template_name: String,
+    /// Template version (e.g. "v1", "v2", "latest")
+    pub template_version: String,
 
     /// Input data for rendering
     pub data: serde_json::Value,
@@ -128,8 +188,8 @@ pub enum RenderStatus {
 }
 
 impl RenderJob {
-    /// Create a new render job
-    pub fn new(template_id: TemplateId, template_version: u64, data: serde_json::Value) -> Self {
+    /// Create a new render job with template name and version
+    pub fn new(template_id: TemplateId, template_name: String, template_version: String, data: serde_json::Value) -> Self {
         // Generate data hash for caching
         let data_string = serde_json::to_string(&data).unwrap_or_default();
         let mut hasher = DefaultHasher::new();
@@ -139,6 +199,7 @@ impl RenderJob {
         Self {
             id: Uuid::new_v4().to_string(),
             template_id,
+            template_name,
             template_version,
             data,
             data_hash,
@@ -149,6 +210,12 @@ impl RenderJob {
             completed_at: None,
             error_message: None,
         }
+    }
+
+    /// Create a new render job (backward compatibility with u64 version)
+    #[deprecated(note = "Use new() with String version instead")]
+    pub fn new_legacy(template_id: TemplateId, template_version: u64, data: serde_json::Value) -> Self {
+        Self::new(template_id.clone(), template_id.as_ref().to_string(), format!("v{}", template_version), data)
     }
 
     /// Mark job as in progress

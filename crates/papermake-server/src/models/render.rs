@@ -9,7 +9,7 @@ use time::OffsetDateTime;
 pub struct RenderJobSummary {
     pub id: String,
     pub template_id: TemplateId,
-    pub template_version: u64,
+    pub template_version: String,
     pub status: RenderStatus,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -51,7 +51,7 @@ impl From<RenderJob> for RenderJobSummary {
 pub struct RenderJobDetails {
     pub id: String,
     pub template_id: TemplateId,
-    pub template_version: u64,
+    pub template_version: String,
     pub data: serde_json::Value,
     pub data_hash: String,
     pub status: RenderStatus,
@@ -78,7 +78,7 @@ pub enum RenderStatus {
 #[derive(Debug, Deserialize)]
 pub struct CreateRenderRequest {
     pub template_id: TemplateId,
-    pub template_version: u64,
+    pub template_version: String,
     pub data: serde_json::Value,
     pub options: Option<RenderOptions>,
 }

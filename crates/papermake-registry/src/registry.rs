@@ -10,8 +10,11 @@ use std::hash::{Hash, Hasher};
 #[async_trait]
 pub trait TemplateRegistry {
 
-    /// Get a specific template version
+    /// Get a specific template version (legacy u64)
     async fn get_template(&self, id: &TemplateId, version: u64) -> Result<VersionedTemplate>;
+
+    /// Get a specific template version by name:version
+    async fn get_template_by_name(&self, template_name: &str, version: &str) -> Result<VersionedTemplate>;
 
     /// List all versions of a template
     async fn list_versions(&self, id: &TemplateId) -> Result<Vec<u64>>;
@@ -22,11 +25,19 @@ pub trait TemplateRegistry {
     /// Search templates by name/description
     async fn search_templates(&self, query: &str) -> Result<Vec<(TemplateId, u64)>>;
 
-    /// Render a template to PDF
+    /// Render a template to PDF (legacy u64)
     async fn render_template(
         &self,
         template_id: &TemplateId,
         version: u64,
+        data: &serde_json::Value,
+    ) -> Result<RenderJob>;
+
+    /// Render a template by name:version to PDF
+    async fn render_template_by_name(
+        &self,
+        template_name: &str,
+        version: &str,
         data: &serde_json::Value,
     ) -> Result<RenderJob>;
 
@@ -55,6 +66,23 @@ pub trait TemplateRegistry {
 
     /// Update render job status
     async fn update_render_job(&self, job: &RenderJob) -> Result<()>;
+
+    // === Draft Management ===
+
+    /// Save a draft template
+    async fn save_draft(&self, template: Template, template_name: String, display_name: String, author: String) -> Result<VersionedTemplate>;
+
+    /// Get a draft template by name
+    async fn get_draft(&self, template_name: &str) -> Result<Option<VersionedTemplate>>;
+
+    /// Delete a draft template
+    async fn delete_draft(&self, template_name: &str) -> Result<()>;
+
+    /// Check if a template has a draft
+    async fn has_draft(&self, template_name: &str) -> Result<bool>;
+
+    /// Publish a draft as a new version
+    async fn publish_draft(&self, template_name: &str) -> Result<VersionedTemplate>;
 }
 
 /// Default implementation of the template registry
@@ -83,6 +111,10 @@ impl TemplateRegistry for DefaultRegistry {
         self.metadata_storage.get_versioned_template(id, version).await
     }
 
+    async fn get_template_by_name(&self, template_name: &str, version: &str) -> Result<VersionedTemplate> {
+        self.metadata_storage.get_versioned_template_by_name(template_name, version).await
+    }
+
     async fn list_versions(&self, id: &TemplateId) -> Result<Vec<u64>> {
         self.metadata_storage.list_template_versions(id).await
     }
@@ -101,7 +133,25 @@ impl TemplateRegistry for DefaultRegistry {
         version: u64,
         data: &serde_json::Value,
     ) -> Result<RenderJob> {
-        let job = RenderJob::new(template_id.clone(), version, data.clone());
+        let job = RenderJob::new(template_id.clone(), template_id.as_ref().to_string(), format!("v{}", version), data.clone());
+        
+        // Save the job
+        self.metadata_storage.save_render_job(&job).await?;
+        
+        // TODO: Implement actual rendering logic
+        // For now, just return the pending job
+        Ok(job)
+    }
+
+    async fn render_template_by_name(
+        &self,
+        template_name: &str,
+        version: &str,
+        data: &serde_json::Value,
+    ) -> Result<RenderJob> {
+        // Get the template to get its ID for the job
+        let template = self.get_template_by_name(template_name, version).await?;
+        let job = RenderJob::new(template.template.id, template_name.to_string(), version.to_string(), data.clone());
         
         // Save the job
         self.metadata_storage.save_render_job(&job).await?;
@@ -152,7 +202,9 @@ impl TemplateRegistry for DefaultRegistry {
         let next_version = versions.into_iter().max().unwrap_or(0) + 1;
         
         // Create versioned template
-        let versioned_template = VersionedTemplate::new(template, next_version, author);
+        let template_name = template.id.as_ref().to_string(); // TODO: Extract proper template name
+        let display_name = template.name.clone();
+        let versioned_template = VersionedTemplate::new(template, template_name, display_name, format!("v{}", next_version), author);
         
         // Save to storage
         self.metadata_storage.save_versioned_template(&versioned_template).await?;
@@ -162,6 +214,46 @@ impl TemplateRegistry for DefaultRegistry {
 
     async fn update_render_job(&self, job: &RenderJob) -> Result<()> {
         self.metadata_storage.save_render_job(job).await
+    }
+
+    // === Draft Management ===
+
+    async fn save_draft(&self, template: Template, template_name: String, display_name: String, author: String) -> Result<VersionedTemplate> {
+        let draft_template = VersionedTemplate::new_draft(template, template_name, display_name, author);
+        self.metadata_storage.save_draft(&draft_template).await?;
+        Ok(draft_template)
+    }
+
+    async fn get_draft(&self, template_name: &str) -> Result<Option<VersionedTemplate>> {
+        self.metadata_storage.get_draft(template_name).await
+    }
+
+    async fn delete_draft(&self, template_name: &str) -> Result<()> {
+        self.metadata_storage.delete_draft(template_name).await
+    }
+
+    async fn has_draft(&self, template_name: &str) -> Result<bool> {
+        self.metadata_storage.has_draft(template_name).await
+    }
+
+    async fn publish_draft(&self, template_name: &str) -> Result<VersionedTemplate> {
+        // Get the draft
+        let draft = self.metadata_storage.get_draft(template_name).await?
+            .ok_or_else(|| crate::RegistryError::TemplateNotFound(format!("No draft found for template {}", template_name)))?;
+
+        // Get next version number
+        let next_version = self.metadata_storage.get_next_version_number(template_name).await?;
+        
+        // Create published version from draft
+        let published_template = draft.publish(format!("v{}", next_version));
+        
+        // Save the published version
+        self.metadata_storage.save_versioned_template(&published_template).await?;
+        
+        // Delete the draft
+        self.metadata_storage.delete_draft(template_name).await?;
+        
+        Ok(published_template)
     }
 }
 

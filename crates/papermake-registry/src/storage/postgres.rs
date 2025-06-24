@@ -56,18 +56,22 @@ impl PostgresStorage {
 
         -- Templates table
         CREATE TABLE IF NOT EXISTS templates (
-            id TEXT NOT NULL,
-            version BIGINT NOT NULL,
+            id TEXT NOT NULL,                    -- UUID for backward compatibility
+            template_name TEXT NOT NULL,         -- Machine-readable name (e.g. "invoice-template")
+            display_name TEXT NOT NULL,          -- Human-readable name (e.g. "Monthly Invoice Template")
+            version TEXT NOT NULL,               -- Version string (e.g. "v1", "v2", "latest", "draft")
             template_data JSONB NOT NULL,
             scope_type TEXT NOT NULL,
             scope_value TEXT,
             author TEXT NOT NULL,
             forked_from_id TEXT,
-            forked_from_version BIGINT,
+            forked_from_version TEXT,            -- Changed to TEXT to support string versions
             published_at TIMESTAMPTZ NOT NULL,
             immutable BOOLEAN NOT NULL,
+            is_draft BOOLEAN NOT NULL DEFAULT FALSE,  -- Track draft vs published status
             marketplace_metadata JSONB,
-            PRIMARY KEY (id, version),
+            PRIMARY KEY (template_name, version), -- Changed primary key to use name:version
+            UNIQUE (id),                          -- Keep id unique for backward compatibility
             FOREIGN KEY (author) REFERENCES users(id)
         );
 
@@ -83,6 +87,9 @@ impl PostgresStorage {
         CREATE INDEX IF NOT EXISTS idx_templates_scope ON templates(scope_type, scope_value);
         CREATE INDEX IF NOT EXISTS idx_templates_author ON templates(author);
         CREATE INDEX IF NOT EXISTS idx_templates_published ON templates(published_at);
+        CREATE INDEX IF NOT EXISTS idx_templates_name ON templates(template_name);
+        CREATE INDEX IF NOT EXISTS idx_templates_draft ON templates(template_name, is_draft);
+        CREATE INDEX IF NOT EXISTS idx_templates_id ON templates(id); -- For backward compatibility
         CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
     "#;
 
@@ -113,36 +120,37 @@ impl super::RegistryStorage for PostgresStorage {
     // === Template Management ===
 
     async fn save_versioned_template(&self, template: &VersionedTemplate) -> Result<()> {
-        let (scope_type, scope_value) = Self::serialize_scope(&template.scope);
         let template_json = serde_json::to_value(&template.template)?;
-        let marketplace_json = template.marketplace_metadata.as_ref()
-            .map(|m| serde_json::to_value(m))
-            .transpose()?;
 
         sqlx::query(
             r#"
             INSERT INTO templates (
-                id, version, template_data, scope_type, scope_value, author,
-                forked_from_id, forked_from_version, published_at, immutable, marketplace_metadata
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-            ON CONFLICT (id, version) DO UPDATE SET
+                id, template_name, display_name, version, template_data, 
+                scope_type, scope_value, author, forked_from_id, forked_from_version, 
+                published_at, immutable, is_draft, marketplace_metadata
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+            ON CONFLICT (template_name, version) DO UPDATE SET
                 template_data = EXCLUDED.template_data,
-                scope_type = EXCLUDED.scope_type,
-                scope_value = EXCLUDED.scope_value,
-                marketplace_metadata = EXCLUDED.marketplace_metadata
+                display_name = EXCLUDED.display_name,
+                published_at = EXCLUDED.published_at,
+                immutable = EXCLUDED.immutable,
+                is_draft = EXCLUDED.is_draft
             "#
         )
         .bind(template.template.id.as_ref())
-        .bind(template.version as i64)
+        .bind(&template.template_name)
+        .bind(&template.display_name)
+        .bind(&template.version)
         .bind(&template_json)
-        .bind(&scope_type)
-        .bind(&scope_value)
-        .bind(template.author.as_ref())
-        .bind(template.forked_from.as_ref().map(|(id, _)| id.as_ref()))
-        .bind(template.forked_from.as_ref().map(|(_, v)| *v as i64))
+        .bind("user") // Default scope for now
+        .bind(Option::<String>::None) // Default scope value
+        .bind(&template.author)
+        .bind(template.forked_from.as_ref().map(|(name, _)| name))
+        .bind(template.forked_from.as_ref().map(|(_, version)| version))
         .bind(template.published_at)
         .bind(template.immutable)
-        .bind(&marketplace_json)
+        .bind(template.is_draft)
+        .bind(Option::<serde_json::Value>::None) // No marketplace metadata for now
         .execute(&self.pool)
         .await?;
 

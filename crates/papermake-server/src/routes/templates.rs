@@ -13,7 +13,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use papermake::TemplateBuilder;
@@ -27,6 +27,9 @@ pub fn router() -> Router<AppState> {
         .route("/{template_id}", get(get_template))
         .route("/{template_id}/versions", get(list_template_versions))
         .route("/{template_id}/versions/{version}", get(get_template_version))
+        // Draft endpoints (by template name)
+        .route("/{template_name}/draft", get(get_draft).put(save_draft).delete(delete_draft))
+        .route("/{template_name}/draft/publish", post(publish_draft))
         .route("/preview", post(preview_template))
         .route("/validate", post(validate_template))
 }
@@ -244,4 +247,72 @@ async fn validate_template(
             Ok(Json(ApiResponse::new(response)))
         }
     }
+}
+
+// === Draft Management Endpoints ===
+
+/// Get a draft template by name
+async fn get_draft(
+    State(state): State<AppState>,
+    Path(template_name): Path<String>,
+) -> Result<Json<ApiResponse<Option<TemplateDetails>>>> {
+    debug!("Getting draft for template: {}", template_name);
+
+    let draft = state.registry.get_draft(&template_name).await?;
+    let details = draft.map(TemplateDetails::from);
+
+    Ok(Json(ApiResponse::new(details)))
+}
+
+/// Save a draft template
+async fn save_draft(
+    State(state): State<AppState>,
+    Path(template_name): Path<String>,
+    Json(request): Json<CreateTemplateRequest>,
+) -> Result<impl IntoResponse> {
+    info!("Saving draft for template: {}", template_name);
+
+    // Build template using papermake's builder
+    let template = TemplateBuilder::new(request.id.clone())
+        .name(request.name.clone())
+        .description(request.description.unwrap_or_default())
+        .content(request.content)
+        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
+        .build()
+        .map_err(|e| ApiError::validation(&e.to_string()))?;
+
+    // Save as draft
+    let draft_template = state
+        .registry
+        .save_draft(template, template_name, request.name, request.author)
+        .await?;
+
+    let details = TemplateDetails::from(draft_template);
+
+    Ok((StatusCode::OK, Json(ApiResponse::new(details))))
+}
+
+/// Delete a draft template
+async fn delete_draft(
+    State(state): State<AppState>,
+    Path(template_name): Path<String>,
+) -> Result<impl IntoResponse> {
+    info!("Deleting draft for template: {}", template_name);
+
+    state.registry.delete_draft(&template_name).await?;
+
+    Ok((StatusCode::NO_CONTENT, ()))
+}
+
+/// Publish a draft as a new version
+async fn publish_draft(
+    State(state): State<AppState>,
+    Path(template_name): Path<String>,
+) -> Result<impl IntoResponse> {
+    info!("Publishing draft for template: {}", template_name);
+
+    let published_template = state.registry.publish_draft(&template_name).await?;
+    let details = TemplateDetails::from(published_template);
+
+    Ok((StatusCode::CREATED, Json(ApiResponse::new(details))))
 }

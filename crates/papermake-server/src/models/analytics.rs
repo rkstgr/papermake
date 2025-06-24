@@ -35,7 +35,7 @@ pub struct DashboardMetrics {
 pub struct TemplateUsage {
     pub template_id: TemplateId,
     pub template_name: String,
-    pub version: u64,
+    pub version: String,
     pub uses_24h: i64,
     pub uses_7d: i64,
     pub uses_30d: i64,
@@ -116,7 +116,7 @@ pub struct TemplateAnalytics {
     pub template_id: TemplateId,
     pub template_name: String,
     pub total_versions: u64,
-    pub latest_version: u64,
+    pub latest_version: String,
     pub usage_over_time: Vec<UsageDataPoint>,
     pub performance_metrics: TemplatePerformanceMetrics,
 }

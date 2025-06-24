@@ -5,6 +5,15 @@ use papermake_registry::{TemplateRegistry, entities::*};
 use tokio::time::Instant;
 use tracing::{debug, error, info};
 
+/// Helper function to parse version string to u64 for legacy compatibility
+fn parse_version_to_u64(version: &str) -> u64 {
+    if let Some(v) = version.strip_prefix('v') {
+        v.parse().unwrap_or(1)
+    } else {
+        version.parse().unwrap_or(1)
+    }
+}
+
 /// Background worker that processes pending render jobs
 pub struct RenderWorker {
     state: AppState,
@@ -59,7 +68,7 @@ impl RenderWorker {
         let template = match self
             .state
             .registry
-            .get_template(&job.template_id, job.template_version)
+            .get_template(&job.template_id, parse_version_to_u64(&job.template_version))
             .await
         {
             Ok(versioned_template) => versioned_template.template,
