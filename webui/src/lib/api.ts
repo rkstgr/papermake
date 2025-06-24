@@ -81,6 +81,7 @@ function buildQueryString(params: Record<string, any>): string {
   
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null) {
+      // Convert numbers to strings properly for URL encoding
       searchParams.append(key, String(value));
     }
   });
