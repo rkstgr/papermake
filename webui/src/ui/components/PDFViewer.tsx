@@ -16,7 +16,6 @@ interface PDFViewerProps {
 
 export function PDFViewer({ blob, className = "" }: PDFViewerProps) {
   const [numPages, setNumPages] = useState<number>(0);
-  const [pageNumber, setPageNumber] = useState<number>(1);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -37,7 +36,6 @@ export function PDFViewer({ blob, className = "" }: PDFViewerProps) {
 
   function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
     setNumPages(numPages);
-    setPageNumber(1);
     setLoading(false);
     setError(null);
   }
@@ -96,32 +94,18 @@ export function PDFViewer({ blob, className = "" }: PDFViewerProps) {
   }
 
   return (
-    <div className={`relative flex flex-col ${className}`}>
-      {/* Page navigation - only show if multiple pages */}
+    <div className={`relative flex flex-col h-full ${className}`} style={{ minHeight: '400px' }}>
+      {/* Page counter for multi-page documents */}
       {numPages > 1 && (
-        <div className="absolute top-2 right-2 z-10 flex items-center gap-2 bg-white/90 backdrop-blur-sm rounded-md px-3 py-1 shadow-sm">
-          <button
-            onClick={() => setPageNumber(Math.max(1, pageNumber - 1))}
-            disabled={pageNumber <= 1}
-            className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            ←
-          </button>
+        <div className="absolute top-2 right-2 z-10 bg-white/90 backdrop-blur-sm rounded-md px-3 py-1 shadow-sm">
           <span className="text-sm text-gray-700">
-            {pageNumber} / {numPages}
+            {numPages} pages
           </span>
-          <button
-            onClick={() => setPageNumber(Math.min(numPages, pageNumber + 1))}
-            disabled={pageNumber >= numPages}
-            className="text-sm text-gray-600 hover:text-gray-900 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            →
-          </button>
         </div>
       )}
 
-      {/* PDF Document */}
-      <div className="flex-1 flex items-center justify-center p-4 bg-gray-50 rounded-md overflow-hidden">
+      {/* PDF Document - Scrollable container */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 bg-gray-50 rounded-md" style={{ maxHeight: 'calc(100% - 8px)' }}>
         <Document
           file={pdfUrl}
           onLoadStart={onLoadStart}
@@ -134,16 +118,19 @@ export function PDFViewer({ blob, className = "" }: PDFViewerProps) {
             </div>
           }
           error={<div className="text-red-500">Failed to load PDF</div>}
-          className="flex items-center justify-center"
+          className="flex flex-col items-center gap-4"
         >
-          <Page
-            pageNumber={pageNumber}
-            renderTextLayer={false}
-            renderAnnotationLayer={false}
-            width={Math.min(window.innerWidth * 0.4, 600)} // Responsive width
-            className="shadow-lg"
-            canvasBackground="white"
-          />
+          {Array.from(new Array(numPages), (el, index) => (
+            <Page
+              key={`page_${index + 1}`}
+              pageNumber={index + 1}
+              renderTextLayer={false}
+              renderAnnotationLayer={false}
+              width={Math.min(window.innerWidth * 0.35, 500)} // Responsive width
+              className="shadow-lg"
+              canvasBackground="white"
+            />
+          ))}
         </Document>
       </div>
     </div>
