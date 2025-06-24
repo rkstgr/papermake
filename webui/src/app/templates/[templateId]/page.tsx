@@ -23,6 +23,7 @@ import { FeatherDownload } from "@subframe/core";
 import { FeatherMaximize2 } from "@subframe/core";
 import { FeatherUpload } from "@subframe/core";
 import { FeatherRefreshCw } from "@subframe/core";
+import { PDFViewer } from "@/ui/components/PDFViewer";
 import { 
   templateApi, 
   renderApi, 
@@ -43,7 +44,7 @@ function TemplateStudio() {
   const [template, setTemplate] = useState<TemplateDetails | null>(null);
   const [templateContent, setTemplateContent] = useState("");
   const [recentRenders, setRecentRenders] = useState<RenderJobSummary[]>([]);
-  const [previewBlob, setPreviewBlob] = useState<string | null>(null);
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
   const [validationResult, setValidationResult] = useState<TemplateValidationResponse | null>(null);
   
   // UI state
@@ -216,11 +217,7 @@ function TemplateStudio() {
         schema: template.schema
       });
       
-      const url = URL.createObjectURL(blob);
-      if (previewBlob) {
-        URL.revokeObjectURL(previewBlob);
-      }
-      setPreviewBlob(url);
+      setPreviewBlob(blob);
       
     } catch (err) {
       console.error("Preview failed:", err);
@@ -229,7 +226,7 @@ function TemplateStudio() {
     } finally {
       setPreviewing(false);
     }
-  }, [template, templateContent, previewBlob, generateSampleData]);
+  }, [template, templateContent, generateSampleData]);
 
   // Auto-preview when content changes (debounced) - only if content is substantial
   useEffect(() => {
@@ -428,12 +425,14 @@ function TemplateStudio() {
                     icon={<FeatherDownload />}
                     onClick={() => {
                       if (previewBlob) {
+                        const url = URL.createObjectURL(previewBlob);
                         const a = document.createElement('a');
-                        a.href = previewBlob;
+                        a.href = url;
                         a.download = `${template.name}-preview.pdf`;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
                       }
                     }}
                     disabled={!previewBlob}
@@ -443,36 +442,19 @@ function TemplateStudio() {
                     icon={<FeatherMaximize2 />}
                     onClick={() => {
                       if (previewBlob) {
-                        window.open(previewBlob, '_blank');
+                        const url = URL.createObjectURL(previewBlob);
+                        window.open(url, '_blank');
+                        // URL will be cleaned up when the new window closes
                       }
                     }}
                     disabled={!previewBlob}
                   />
                 </div>
               </div>
-              <div className="flex w-full grow shrink-0 basis-0 items-center justify-center rounded-md border border-dashed border-neutral-border bg-neutral-50">
-                {previewBlob ? (
-                  <iframe
-                    src={previewBlob}
-                    className="w-full h-full rounded-md"
-                    title="PDF Preview"
-                  />
-                ) : (
-                  <div className="flex flex-col items-center gap-2 text-subtext-color">
-                    {previewing ? (
-                      <>
-                        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-subtext-color"></div>
-                        <span>Generating preview...</span>
-                      </>
-                    ) : (
-                      <>
-                        <FeatherFile className="h-8 w-8" />
-                        <span>Preview will appear here</span>
-                      </>
-                    )}
-                  </div>
-                )}
-              </div>
+              <PDFViewer 
+                blob={previewBlob} 
+                className="w-full grow shrink-0 basis-0 rounded-md border border-dashed border-neutral-border bg-neutral-50"
+              />
             </div>
           </div>
         </div>
