@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { DefaultPageLayout } from "@/ui/layouts/DefaultPageLayout";
 import { Badge } from "@/ui/components/Badge";
 import { FeatherArrowUp } from "@subframe/core";
@@ -19,8 +19,67 @@ import { FeatherClock } from "@subframe/core";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
 import { FeatherBarChart2 } from "@subframe/core";
+import {
+  analyticsApi,
+  renderApi,
+  templateApi,
+  formatLatency,
+  formatRelativeTime,
+  formatFileSize,
+} from "@/lib/api";
+import {
+  DashboardMetrics,
+  RenderJobSummary,
+  TemplateSummary,
+} from "@/lib/types";
 
 function RenderInsightsHub() {
+  const [dashboardData, setDashboardData] = useState<DashboardMetrics | null>(
+    null,
+  );
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchDashboardData = async () => {
+      try {
+        setLoading(true);
+        const data = await analyticsApi.getDashboard();
+        setDashboardData(data);
+        setError(null);
+      } catch (err) {
+        console.error("Failed to fetch dashboard data:", err);
+        setError("Failed to load dashboard data");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDashboardData();
+  }, []);
+
+  if (loading) {
+    return (
+      <DefaultPageLayout>
+        <div className="container max-w-none flex h-full w-full flex-col items-center justify-center">
+          <div className="text-lg">Loading dashboard...</div>
+        </div>
+      </DefaultPageLayout>
+    );
+  }
+
+  if (error || !dashboardData) {
+    return (
+      <DefaultPageLayout>
+        <div className="container max-w-none flex h-full w-full flex-col items-center justify-center">
+          <div className="text-lg text-red-600">
+            {error || "Failed to load data"}
+          </div>
+        </div>
+      </DefaultPageLayout>
+    );
+  }
+
   return (
     <DefaultPageLayout>
       <div className="container max-w-none flex h-full w-full flex-col items-start gap-8 bg-default-background py-12">
@@ -39,10 +98,10 @@ function RenderInsightsHub() {
             </span>
             <div className="flex w-full flex-col items-start gap-2">
               <span className="text-heading-2 font-heading-2 text-default-font">
-                24,521
+                {dashboardData.total_renders_24h.toLocaleString()}
               </span>
               <Badge variant="success" icon={<FeatherArrowUp />}>
-                15% vs last week
+                24h total
               </Badge>
             </div>
           </div>
@@ -52,11 +111,11 @@ function RenderInsightsHub() {
             </span>
             <div className="flex w-full flex-col items-start gap-2">
               <span className="text-heading-2 font-heading-2 text-default-font">
-                1.2s
+                {dashboardData.p90_latency_ms
+                  ? formatLatency(dashboardData.p90_latency_ms)
+                  : "N/A"}
               </span>
-              <Badge variant="success" icon={<FeatherArrowDown />}>
-                0.3s improvement
-              </Badge>
+              <Badge variant="neutral">P90 latency</Badge>
             </div>
           </div>
           <div className="flex grow shrink-0 basis-0 flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4">
@@ -65,10 +124,10 @@ function RenderInsightsHub() {
             </span>
             <div className="flex w-full flex-col items-start gap-2">
               <span className="text-heading-2 font-heading-2 text-default-font">
-                142
+                {dashboardData.popular_templates.length}
               </span>
               <Badge variant="neutral" icon={<FeatherPlus />}>
-                4 new this week
+                {dashboardData.new_templates.length} new
               </Badge>
             </div>
           </div>
@@ -127,138 +186,118 @@ function RenderInsightsHub() {
           <Table
             header={
               <Table.HeaderRow>
+                <Table.HeaderCell>Render ID</Table.HeaderCell>
                 <Table.HeaderCell>Template</Table.HeaderCell>
                 <Table.HeaderCell>Status</Table.HeaderCell>
-                <Table.HeaderCell>Time</Table.HeaderCell>
-                <Table.HeaderCell>Size</Table.HeaderCell>
-                <Table.HeaderCell>User</Table.HeaderCell>
+                <Table.HeaderCell>Render Time</Table.HeaderCell>
+                <Table.HeaderCell>Completed</Table.HeaderCell>
                 <Table.HeaderCell />
               </Table.HeaderRow>
             }
           >
-            <Table.Row>
-              <Table.Cell>
-                <span className="text-body-bold font-body-bold text-neutral-700">
-                  Invoice Template
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <Badge variant="success" icon={<FeatherCheckCircle />}>
-                  Complete
-                </Badge>
-              </Table.Cell>
-              <Table.Cell>
-                <span className="text-body font-body text-neutral-500">
-                  1.1s
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <span className="text-body font-body text-neutral-500">
-                  245 KB
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex items-center gap-2">
-                  <Avatar size="small" image="">
-                    JD
-                  </Avatar>
-                  <span className="text-body font-body text-neutral-500">
-                    John Doe
-                  </span>
-                </div>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex grow shrink-0 basis-0 items-center justify-end">
-                  <IconButton
-                    icon={<FeatherDownload />}
-                    onClick={(event: React.MouseEvent<HTMLButtonElement>) => {}}
-                  />
-                </div>
-              </Table.Cell>
-            </Table.Row>
-            <Table.Row>
-              <Table.Cell>
-                <span className="text-body-bold font-body-bold text-neutral-700">
-                  Report Template
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <Badge variant="success" icon={<FeatherCheckCircle />}>
-                  Complete
-                </Badge>
-              </Table.Cell>
-              <Table.Cell>
-                <span className="text-body font-body text-neutral-500">
-                  0.8s
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <span className="text-body font-body text-neutral-500">
-                  180 KB
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex items-center gap-2">
-                  <Avatar size="small" image="">
-                    AS
-                  </Avatar>
-                  <span className="text-body font-body text-neutral-500">
-                    Alice Smith
-                  </span>
-                </div>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex grow shrink-0 basis-0 items-center justify-end">
-                  <IconButton
-                    icon={<FeatherDownload />}
-                    onClick={(event: React.MouseEvent<HTMLButtonElement>) => {}}
-                  />
-                </div>
-              </Table.Cell>
-            </Table.Row>
-            <Table.Row>
-              <Table.Cell>
-                <span className="text-body-bold font-body-bold text-neutral-700">
-                  Contract Template
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <Badge variant="warning" icon={<FeatherClock />}>
-                  Processing
-                </Badge>
-              </Table.Cell>
-              <Table.Cell>
-                <span className="text-body font-body text-neutral-500">
-                  2.1s
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <span className="text-body font-body text-neutral-500">
-                  320 KB
-                </span>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex items-center gap-2">
-                  <Avatar size="small" image="">
-                    RJ
-                  </Avatar>
-                  <span className="text-body font-body text-neutral-500">
-                    Robert Johnson
-                  </span>
-                </div>
-              </Table.Cell>
-              <Table.Cell>
-                <div className="flex grow shrink-0 basis-0 items-center justify-end">
-                  <IconButton
-                    icon={<FeatherDownload />}
-                    onClick={(event: React.MouseEvent<HTMLButtonElement>) => {}}
-                  />
-                </div>
-              </Table.Cell>
-            </Table.Row>
+            {dashboardData.recent_renders.map((render) => {
+              const getStatusBadge = (status: string) => {
+                switch (status) {
+                  case "completed":
+                    return (
+                      <Badge variant="success" icon={<FeatherCheckCircle />}>
+                        Complete
+                      </Badge>
+                    );
+                  case "processing":
+                    return (
+                      <Badge variant="warning" icon={<FeatherClock />}>
+                        Processing
+                      </Badge>
+                    );
+                  case "queued":
+                    return (
+                      <Badge variant="neutral" icon={<FeatherClock />}>
+                        Queued
+                      </Badge>
+                    );
+                  case "failed":
+                    return <Badge variant="error">Failed</Badge>;
+                  default:
+                    return <Badge variant="neutral">{status}</Badge>;
+                }
+              };
+
+              const handleDownload = async () => {
+                if (render.status === "completed" && render.pdf_url) {
+                  try {
+                    const blob = await renderApi.downloadPdf(render.id);
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `${render.template_id}-${render.id}.pdf`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                  } catch (error) {
+                    console.error("Failed to download PDF:", error);
+                  }
+                }
+              };
+
+              const handleCopyId = async () => {
+                try {
+                  await navigator.clipboard.writeText(render.id);
+                } catch (error) {
+                  console.error("Failed to copy ID:", error);
+                }
+              };
+
+              // Truncate render ID to first 8 characters
+              const truncatedId = render.id.substring(0, 8);
+
+              return (
+                <Table.Row key={render.id}>
+                  <Table.Cell>
+                    <button
+                      onClick={handleCopyId}
+                      className="text-body text-neutral-500 font-mono"
+                      title={`Click to copy full ID: ${render.id}`}
+                    >
+                      {truncatedId}
+                    </button>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <span className="text-body-bold font-body-bold text-neutral-700">
+                      {render.template_id}
+                    </span>
+                  </Table.Cell>
+                  <Table.Cell>{getStatusBadge(render.status)}</Table.Cell>
+                  <Table.Cell>
+                    <span className="text-body font-body text-neutral-500">
+                      {formatLatency(render.rendering_latency)}
+                    </span>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <span className="text-body font-body text-neutral-500">
+                      {render.completed_at
+                        ? formatRelativeTime(render.completed_at)
+                        : formatRelativeTime(render.created_at)}
+                    </span>
+                  </Table.Cell>
+                  <Table.Cell>
+                    <div className="flex grow shrink-0 basis-0 items-center justify-end">
+                      <IconButton
+                        icon={<FeatherDownload />}
+                        onClick={handleDownload}
+                        disabled={
+                          render.status !== "completed" || !render.pdf_url
+                        }
+                      />
+                    </div>
+                  </Table.Cell>
+                </Table.Row>
+              );
+            })}
           </Table>
         </div>
-        <div className="flex w-full flex-col items-start gap-6">
+        <div className="flex w-full flex-col items-start gap-6 pb-10">
           <div className="flex w-full items-center justify-between">
             <span className="text-heading-3 font-heading-3 text-default-font">
               Templates
@@ -276,57 +315,28 @@ function RenderInsightsHub() {
             <Tabs.Item>All Templates</Tabs.Item>
           </Tabs>
           <div className="w-full items-start gap-4 grid grid-cols-3">
-            <div className="flex flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4">
-              <div className="flex w-full items-start justify-between">
-                <span className="text-body-bold font-body-bold text-default-font">
-                  Invoice Template
-                </span>
-                <Badge variant="success">Active</Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <FeatherBarChart2 className="text-body font-body text-subtext-color" />
-                <span className="text-body font-body text-subtext-color">
-                  2,451 uses
-                </span>
-              </div>
-              <span className="text-caption font-caption text-subtext-color">
-                Last updated: 2 days ago
-              </span>
-            </div>
-            <div className="flex flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4">
-              <div className="flex w-full items-start justify-between">
-                <span className="text-body-bold font-body-bold text-default-font">
-                  Report Template
-                </span>
-                <Badge variant="success">Active</Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <FeatherBarChart2 className="text-body font-body text-subtext-color" />
-                <span className="text-body font-body text-subtext-color">
-                  1,832 uses
+            {dashboardData.popular_templates.slice(0, 3).map((template) => (
+              <div
+                key={template.template_id}
+                className="flex flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4"
+              >
+                <div className="flex w-full items-start justify-between">
+                  <span className="text-body-bold font-body-bold text-default-font">
+                    {template.template_name}
+                  </span>
+                  <Badge variant="success">Active</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <FeatherBarChart2 className="text-body font-body text-subtext-color" />
+                  <span className="text-body font-body text-subtext-color">
+                    {template.uses_24h.toLocaleString()} uses (24h)
+                  </span>
+                </div>
+                <span className="text-caption font-caption text-subtext-color">
+                  Last updated: {formatRelativeTime(template.published_at)}
                 </span>
               </div>
-              <span className="text-caption font-caption text-subtext-color">
-                Last updated: 5 days ago
-              </span>
-            </div>
-            <div className="flex flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4">
-              <div className="flex w-full items-start justify-between">
-                <span className="text-body-bold font-body-bold text-default-font">
-                  Contract Template
-                </span>
-                <Badge>Draft</Badge>
-              </div>
-              <div className="flex items-center gap-2">
-                <FeatherBarChart2 className="text-body font-body text-subtext-color" />
-                <span className="text-body font-body text-subtext-color">
-                  845 uses
-                </span>
-              </div>
-              <span className="text-caption font-caption text-subtext-color">
-                Last updated: 1 week ago
-              </span>
-            </div>
+            ))}
           </div>
         </div>
       </div>
