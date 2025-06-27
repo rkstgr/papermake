@@ -4,7 +4,7 @@
 //! It works with AWS S3, MinIO, JuiceFS, and any S3-compatible object storage.
 
 use super::FileStorage;
-use crate::{RegistryError, error::Result};
+use crate::{RegistryError, error::Result, template_ref::TemplateRef};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use minio::s3::{
@@ -179,14 +179,21 @@ impl FileStorage for S3Storage {
 }
 
 impl S3Storage {
-    /// Generate S3 key for template source file
-    pub fn template_source_key(template_id: &str, tag: &str) -> String {
-        format!("templates/{}/versions/{}/source.typ", template_id, tag)
+    /// Generate S3 key for template source file using Docker-style TemplateRef
+    pub fn template_source_key(template_ref: &TemplateRef) -> String {
+        match &template_ref.org {
+            Some(org) => format!("templates/{}/{}/{}/source.typ", org, template_ref.name, template_ref.tag),
+            None => format!("templates/{}/{}/source.typ", template_ref.name, template_ref.tag),
+        }
     }
 
-    /// Generate S3 key for template asset
-    pub fn template_asset_key(template_id: &str, asset_path: &str) -> String {
-        format!("templates/{}/assets/{}", template_id, asset_path)
+    /// Generate S3 key for template asset using Docker-style TemplateRef
+    /// Assets are stored without version to enable reuse across template versions
+    pub fn template_asset_key(template_ref: &TemplateRef, asset_path: &str) -> String {
+        match &template_ref.org {
+            Some(org) => format!("templates/{}/{}/assets/{}", org, template_ref.name, asset_path),
+            None => format!("templates/{}/assets/{}", template_ref.name, asset_path),
+        }
     }
 
     /// Generate S3 key for rendered PDF
@@ -194,14 +201,27 @@ impl S3Storage {
         format!("renders/{}.pdf", job_id)
     }
 
-    /// Generate S3 key prefix for template files
-    pub fn template_prefix(template_id: &str) -> String {
-        format!("templates/{}/", template_id)
+    /// Generate S3 key prefix for template files using Docker-style TemplateRef
+    pub fn template_prefix(template_ref: &TemplateRef) -> String {
+        match &template_ref.org {
+            Some(org) => format!("templates/{}/{}/", org, template_ref.name),
+            None => format!("templates/{}/", template_ref.name),
+        }
     }
 
     /// Generate S3 key prefix for all renders
     pub fn renders_prefix() -> String {
         "renders/".to_string()
+    }
+
+    /// Generate S3 key prefix for organization templates
+    pub fn org_templates_prefix(org: &str) -> String {
+        format!("templates/{}/", org)
+    }
+
+    /// Generate S3 key prefix for all templates (no org)
+    pub fn all_templates_prefix() -> String {
+        "templates/".to_string()
     }
 }
 
@@ -210,22 +230,70 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_key_generation() {
+    fn test_key_generation_without_org() {
+        let template_ref = TemplateRef::new("my-template").with_tag("v1");
+
         assert_eq!(
-            S3Storage::template_source_key("my-template", "v1"),
-            "templates/my-template/versions/v1/source.typ"
+            S3Storage::template_source_key(&template_ref),
+            "templates/my-template/v1/source.typ"
         );
 
         assert_eq!(
-            S3Storage::template_asset_key("my-template", "fonts/Arial.ttf"),
+            S3Storage::template_asset_key(&template_ref, "fonts/Arial.ttf"),
             "templates/my-template/assets/fonts/Arial.ttf"
         );
 
-        assert_eq!(S3Storage::render_pdf_key("job-123"), "renders/job-123.pdf");
+        assert_eq!(
+            S3Storage::template_prefix(&template_ref),
+            "templates/my-template/"
+        );
+    }
+
+    #[test]
+    fn test_key_generation_with_org() {
+        let template_ref = TemplateRef::with_org("mycompany", "invoice").with_tag("v2");
 
         assert_eq!(
-            S3Storage::template_prefix("my-template"),
-            "templates/my-template/"
+            S3Storage::template_source_key(&template_ref),
+            "templates/mycompany/invoice/v2/source.typ"
+        );
+
+        assert_eq!(
+            S3Storage::template_asset_key(&template_ref, "fonts/Arial.ttf"),
+            "templates/mycompany/invoice/assets/fonts/Arial.ttf"
+        );
+
+        assert_eq!(
+            S3Storage::template_prefix(&template_ref),
+            "templates/mycompany/invoice/"
+        );
+    }
+
+    #[test]
+    fn test_render_and_prefix_keys() {
+        assert_eq!(S3Storage::render_pdf_key("job-123"), "renders/job-123.pdf");
+        assert_eq!(S3Storage::renders_prefix(), "renders/");
+        assert_eq!(S3Storage::org_templates_prefix("mycompany"), "templates/mycompany/");
+        assert_eq!(S3Storage::all_templates_prefix(), "templates/");
+    }
+
+    #[test]
+    fn test_latest_tag() {
+        let template_ref = TemplateRef::new("my-template"); // defaults to "latest"
+
+        assert_eq!(
+            S3Storage::template_source_key(&template_ref),
+            "templates/my-template/latest/source.typ"
+        );
+    }
+
+    #[test]
+    fn test_draft_tag() {
+        let template_ref = TemplateRef::new("my-template").with_tag("draft");
+
+        assert_eq!(
+            S3Storage::template_source_key(&template_ref),
+            "templates/my-template/draft/source.typ"
         );
     }
 }

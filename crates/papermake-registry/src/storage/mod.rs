@@ -1,6 +1,6 @@
 //! Storage abstraction for registry data
 
-use crate::{entities::*, error::Result, template_ref::TemplateRef};
+use crate::{entities::*, error::Result};
 use async_trait::async_trait;
 // Re-export for convenience
 pub use papermake::FileError;
@@ -27,59 +27,27 @@ pub mod file_storage;
 pub mod postgres;
 
 /// Metadata storage trait for template and render job data
-///
-/// This trait handles structured data stored in TiKV
 #[async_trait]
 pub trait MetadataStorage: Send + Sync {
     // === Template Management ===
 
     /// Save a template entry
-    async fn save_template_entry(&self, template: &TemplateEntry) -> Result<()>;
+    async fn save_template(&self, template: &TemplateEntry) -> Result<()>;
 
-    /// Get a template entry by reference string
-    async fn get_template_entry(
-        &self,
-        template_ref: &str,
-    ) -> Result<TemplateEntry>;
+    /// Get a template entry by Docker-style reference (org/name:tag[@digest])
+    async fn get_template(&self, template_ref: &str) -> Result<TemplateEntry>;
 
-    /// Get a template entry by name and tag
-    async fn get_template_entry_by_name_tag(
-        &self,
-        name: &str,
-        tag: &str,
-    ) -> Result<TemplateEntry>;
+    /// Delete a template entry by reference
+    async fn delete_template(&self, template_ref: &str) -> Result<()>;
 
     /// List all tags for a template by name
     async fn list_template_tags(&self, name: &str) -> Result<Vec<String>>;
 
-    /// List all template entries for a given name
-    async fn list_template_entries(&self, name: &str) -> Result<Vec<TemplateEntry>>;
-
-    /// Delete a specific template entry by reference
-    async fn delete_template_entry(&self, template_ref: &str) -> Result<()>;
-
-    /// Delete a template entry by name and tag
-    async fn delete_template_entry_by_name_tag(&self, name: &str, tag: &str) -> Result<()>;
-
     /// Search templates by name/description  
     async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>>;
 
-    // === Draft Management ===
-
-    /// Save a draft template entry
-    async fn save_draft(&self, template: &TemplateEntry) -> Result<()>;
-
-    /// Get a draft template entry by name
-    async fn get_draft(&self, name: &str) -> Result<Option<TemplateEntry>>;
-
-    /// Delete a draft template entry
-    async fn delete_draft(&self, name: &str) -> Result<()>;
-
-    /// Check if a template has a draft
-    async fn has_draft(&self, name: &str) -> Result<bool>;
-
-    /// Get the next tag number for auto-incrementing (e.g., "v3" after "v2")
-    async fn get_next_tag_number(&self, name: &str) -> Result<u64>;
+    /// Get the next version number for auto-incrementing (e.g., 3 after v2)
+    async fn get_next_version_number(&self, name: &str) -> Result<u64>;
 
     // === Render Job Management ===
 
@@ -90,34 +58,16 @@ pub trait MetadataStorage: Send + Sync {
     async fn get_render_job(&self, job_id: &str) -> Result<RenderJob>;
 
     /// Find render job by template reference and data hash (for caching)
-    async fn find_render_job_by_hash(
+    async fn find_cached_render(
         &self,
         template_ref: &str,
-        data_hash: &str,
-    ) -> Result<Option<RenderJob>>;
-
-    /// Find render job by template name, tag and data hash
-    async fn find_render_job_by_name_tag_hash(
-        &self,
-        name: &str,
-        tag: &str,
         data_hash: &str,
     ) -> Result<Option<RenderJob>>;
 
     /// List render jobs for a template by reference
-    async fn list_render_jobs_by_template(
-        &self,
-        template_ref: &str,
-    ) -> Result<Vec<RenderJob>>;
+    async fn list_render_jobs(&self, template_ref: &str) -> Result<Vec<RenderJob>>;
 
-    /// List render jobs for a template by name and optional tag
-    async fn list_render_jobs_by_name(
-        &self,
-        name: &str,
-        tag: Option<&str>,
-    ) -> Result<Vec<RenderJob>>;
-
-    /// List all templates (latest tag of each)
+    /// List all templates
     async fn list_all_templates(&self) -> Result<Vec<TemplateEntry>>;
 
     /// List all render jobs

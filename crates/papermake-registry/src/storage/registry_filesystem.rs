@@ -5,9 +5,9 @@
 //! and assets from S3 during rendering.
 
 use super::{FileStorage, s3_storage::S3Storage};
-use crate::error::{RegistryError, Result};
+use crate::{error::{RegistryError, Result}, template_ref::TemplateRef};
 use async_trait::async_trait;
-use papermake::{TemplateId, TypstFileSystem};
+use papermake::TypstFileSystem;
 // FileError is used in map_err closure
 use std::sync::Arc;
 
@@ -17,16 +17,16 @@ pub struct RegistryFileSystem {
     /// File storage backend (S3)
     file_storage: Arc<dyn FileStorage>,
 
-    /// Template ID for scoping file access
-    template_id: TemplateId,
+    /// Template reference for scoping file access
+    template_ref: TemplateRef,
 }
 
 impl RegistryFileSystem {
     /// Create a new registry file system for a specific template
-    pub fn new(file_storage: Arc<dyn FileStorage>, template_id: TemplateId) -> Self {
+    pub fn new(file_storage: Arc<dyn FileStorage>, template_ref: TemplateRef) -> Self {
         Self {
             file_storage,
-            template_id,
+            template_ref,
         }
     }
 }
@@ -37,10 +37,10 @@ impl TypstFileSystem for RegistryFileSystem {
         // Determine the S3 key based on file type and path
         let s3_key = if path.ends_with(".typ") {
             // Typst source files - could be imports or includes
-            S3Storage::template_asset_key(self.template_id.as_ref(), path)
+            S3Storage::template_asset_key(&self.template_ref, path)
         } else {
             // Other assets (fonts, images, etc.)
-            S3Storage::template_asset_key(self.template_id.as_ref(), path)
+            S3Storage::template_asset_key(&self.template_ref, path)
         };
 
         // Load from S3
@@ -59,20 +59,20 @@ impl TypstFileSystem for RegistryFileSystem {
 /// Convenience functions for working with template files
 impl RegistryFileSystem {
     /// Store a template source file
-    pub async fn store_template_source(&self, tag: &str, content: &str) -> Result<()> {
-        let key = S3Storage::template_source_key(self.template_id.as_ref(), tag);
+    pub async fn store_template_source(&self, content: &str) -> Result<()> {
+        let key = S3Storage::template_source_key(&self.template_ref);
         self.file_storage.put_file(&key, content.as_bytes()).await
     }
 
     /// Store a template asset
     pub async fn store_template_asset(&self, asset_path: &str, content: &[u8]) -> Result<()> {
-        let key = S3Storage::template_asset_key(self.template_id.as_ref(), asset_path);
+        let key = S3Storage::template_asset_key(&self.template_ref, asset_path);
         self.file_storage.put_file(&key, content).await
     }
 
     /// List all assets for this template
     pub async fn list_template_assets(&self) -> Result<Vec<String>> {
-        let prefix = S3Storage::template_prefix(self.template_id.as_ref());
+        let prefix = S3Storage::template_prefix(&self.template_ref);
         let keys = self.file_storage.list_files(&prefix).await?;
 
         // Filter to only assets (exclude source files) and strip prefix
@@ -81,10 +81,14 @@ impl RegistryFileSystem {
             .filter(|key| key.contains("/assets/") && !key.ends_with("/source.typ"))
             .filter_map(|key| {
                 // Extract the asset path from the full S3 key
-                // Format: "templates/{template_id}/assets/{asset_path}"
+                // Format: "templates/{org}/{name}/assets/{asset_path}" or "templates/{name}/assets/{asset_path}"
                 let parts: Vec<&str> = key.split('/').collect();
-                if parts.len() >= 4 && parts[2] == "assets" {
-                    Some(parts[3..].join("/"))
+                if let Some(assets_index) = parts.iter().position(|&part| part == "assets") {
+                    if assets_index + 1 < parts.len() {
+                        Some(parts[assets_index + 1..].join("/"))
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -96,7 +100,7 @@ impl RegistryFileSystem {
 
     /// Delete all files for this template
     pub async fn delete_template_files(&self) -> Result<()> {
-        let prefix = S3Storage::template_prefix(self.template_id.as_ref());
+        let prefix = S3Storage::template_prefix(&self.template_ref);
         let keys = self.file_storage.list_files(&prefix).await?;
 
         for key in keys {
@@ -169,8 +173,8 @@ mod tests {
     #[tokio::test]
     async fn test_registry_filesystem() {
         let storage = Arc::new(MockFileStorage::new());
-        let template_id = TemplateId::from("test-template");
-        let fs = RegistryFileSystem::new(storage.clone(), template_id.clone());
+        let template_ref = TemplateRef::new("test-template").with_tag("v1");
+        let fs = RegistryFileSystem::new(storage.clone(), template_ref);
 
         // Store a template asset
         let asset_content = b"Hello, World!";
@@ -190,11 +194,11 @@ mod tests {
     #[tokio::test]
     async fn test_template_operations() {
         let storage = Arc::new(MockFileStorage::new());
-        let template_id = TemplateId::from("test-template");
-        let fs = RegistryFileSystem::new(storage.clone(), template_id.clone());
+        let template_ref = TemplateRef::new("test-template").with_tag("v1");
+        let fs = RegistryFileSystem::new(storage.clone(), template_ref);
 
         // Store template source
-        fs.store_template_source("v1", "= Hello World")
+        fs.store_template_source("= Hello World")
             .await
             .unwrap();
 

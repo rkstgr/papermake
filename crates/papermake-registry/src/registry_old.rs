@@ -78,38 +78,26 @@ pub trait TemplateRegistry {
     /// Update render job status
     async fn update_render_job(&self, job: &RenderJob) -> Result<()>;
 
-    // === Simplified Draft Management ===
-    // Note: Drafts are just templates with tag: "draft" - no special methods needed!
-    // Use save_draft_template() which calls publish_template() with draft tag
+    // === Draft Management ===
 
-    /// Save a draft template (convenience method)
-    async fn save_draft_template(
+    /// Save a draft template
+    async fn save_draft(
         &self,
         template: Template,
-        name: String,
+        template_ref: TemplateRef,
         author: String,
-    ) -> Result<TemplateEntry> {
-        let template_ref = TemplateRef::new(name).with_tag("draft");
-        self.publish_template(template, template_ref, author).await
-    }
+    ) -> Result<TemplateEntry>;
 
-    /// Get a draft template by name (convenience method)
-    async fn get_draft_template(&self, name: &str) -> Result<Option<TemplateEntry>> {
-        let template_ref = TemplateRef::new(name).with_tag("draft");
-        match self.get_template(&template_ref.to_string()).await {
-            Ok(template) => Ok(Some(template)),
-            Err(crate::RegistryError::TemplateNotFound(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
+    /// Get a draft template by name
+    async fn get_draft(&self, name: &str) -> Result<Option<TemplateEntry>>;
 
-    /// Delete a draft template (convenience method)
-    async fn delete_draft_template(&self, name: &str) -> Result<()> {
-        let template_ref = TemplateRef::new(name).with_tag("draft");
-        self.delete_template(&template_ref.to_string()).await
-    }
+    /// Delete a draft template
+    async fn delete_draft(&self, name: &str) -> Result<()>;
 
-    /// Publish a draft as a new version (convenience method)
+    /// Check if a template has a draft
+    async fn has_draft(&self, name: &str) -> Result<bool>;
+
+    /// Publish a draft as a new version
     async fn publish_draft(&self, name: &str) -> Result<TemplateEntry>;
 }
 
@@ -134,49 +122,42 @@ impl DefaultRegistry {
 
 #[async_trait]
 impl TemplateRegistry for DefaultRegistry {
-    async fn get_template(&self, template_ref: &str) -> Result<TemplateEntry> {
+    async fn get_template(&self, name: &str, tag: &str) -> Result<VersionedTemplate> {
         self.metadata_storage
-            .get_template(template_ref)
+            .get_versioned_template_by_name(name, tag)
             .await
     }
 
     async fn get_template_by_name(
         &self,
-        name: &str,
+        template_name: &str,
         tag: &str,
-    ) -> Result<TemplateEntry> {
-        let template_ref = TemplateRef::new(name).with_tag(tag);
+    ) -> Result<VersionedTemplate> {
         self.metadata_storage
-            .get_template(&template_ref.to_string())
+            .get_versioned_template_by_name(template_name, tag)
             .await
     }
 
-    async fn list_tags(&self, name: &str) -> Result<Vec<String>> {
+
+    async fn delete_template(&self, id: &TemplateId, version: u64) -> Result<()> {
         self.metadata_storage
-            .list_template_tags(name)
+            .delete_template_version(id, version)
             .await
     }
 
-    async fn delete_template(&self, template_ref: &str) -> Result<()> {
-        self.metadata_storage
-            .delete_template(template_ref)
-            .await
-    }
-
-    async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>> {
+    async fn search_templates(&self, query: &str) -> Result<Vec<(TemplateId, u64)>> {
         self.metadata_storage.search_templates(query).await
     }
 
     async fn render_template(
         &self,
-        template_ref: &str,
+        template_id: &TemplateId,
+        version: u64,
         data: &serde_json::Value,
     ) -> Result<RenderJob> {
-        let template_ref_parsed: TemplateRef = template_ref.parse().map_err(|_| {
-            crate::RegistryError::TemplateNotFound(format!("Invalid template reference: {}", template_ref))
-        })?;
-        
-        let job = RenderJob::new(template_ref_parsed, data.clone());
+        // Convert legacy template_id to template_name for job creation
+        let template_name = template_id.as_ref().to_string();
+        let job = RenderJob::new(template_name, format!("v{}", version), data.clone());
 
         // Save the job
         self.metadata_storage.save_render_job(&job).await?;
@@ -188,12 +169,11 @@ impl TemplateRegistry for DefaultRegistry {
 
     async fn render_template_by_name(
         &self,
-        name: &str,
+        template_name: &str,
         tag: &str,
         data: &serde_json::Value,
     ) -> Result<RenderJob> {
-        let template_ref = TemplateRef::new(name).with_tag(tag);
-        let job = RenderJob::new(template_ref, data.clone());
+        let job = RenderJob::new(template_name.to_string(), tag.to_string(), data.clone());
 
         // Save the job
         self.metadata_storage.save_render_job(&job).await?;
@@ -209,7 +189,8 @@ impl TemplateRegistry for DefaultRegistry {
 
     async fn find_cached_render(
         &self,
-        template_ref: &str,
+        template_id: &TemplateId,
+        version: u64,
         data: &serde_json::Value,
     ) -> Result<Option<RenderJob>> {
         // Generate data hash for lookup
@@ -218,19 +199,28 @@ impl TemplateRegistry for DefaultRegistry {
         data_string.hash(&mut hasher);
         let data_hash = format!("{:x}", hasher.finish());
 
+        let template_name = template_id.as_ref().to_string();
+        let template_tag = format!("v{}", version);
         self.metadata_storage
-            .find_cached_render(template_ref, &data_hash)
+            .find_render_job_by_hash_name(&template_name, &template_tag, &data_hash)
             .await
     }
 
-    async fn get_latest_template(&self, name: &str) -> Result<TemplateEntry> {
-        let template_ref = TemplateRef::new(name).with_tag("latest");
+    async fn get_latest_template(&self, id: &TemplateId) -> Result<VersionedTemplate> {
+        let versions = self.metadata_storage.list_template_versions(id).await?;
+        let latest_version = versions.into_iter().max().ok_or_else(|| {
+            crate::RegistryError::TemplateNotFound(format!(
+                "No versions found for template {:?}",
+                id
+            ))
+        })?;
         self.metadata_storage
-            .get_template(&template_ref.to_string())
+            .get_versioned_template(id, latest_version)
             .await
     }
 
-    async fn list_templates(&self) -> Result<Vec<TemplateEntry>> {
+
+    async fn list_templates(&self) -> Result<Vec<VersionedTemplate>> {
         self.metadata_storage.list_all_templates().await
     }
 
@@ -249,7 +239,7 @@ impl TemplateRegistry for DefaultRegistry {
 
         // Save to storage
         self.metadata_storage
-            .save_template(&template_entry)
+            .save_template_entry(&template_entry)
             .await?;
 
         Ok(template_entry)
@@ -259,23 +249,60 @@ impl TemplateRegistry for DefaultRegistry {
         self.metadata_storage.save_render_job(job).await
     }
 
+    // === Draft Management ===
+
+    async fn save_draft(
+        &self,
+        template: Template,
+        template_ref: TemplateRef,
+        author: String,
+    ) -> Result<TemplateEntry> {
+        let draft_template = TemplateEntry::new_draft(template, template_ref, author);
+        self.metadata_storage.save_draft(&draft_template).await?;
+        Ok(draft_template)
+    }
+
+    async fn get_draft(&self, name: &str) -> Result<Option<TemplateEntry>> {
+        self.metadata_storage.get_draft(name).await
+    }
+
+    async fn delete_draft(&self, name: &str) -> Result<()> {
+        self.metadata_storage.delete_draft(name).await
+    }
+
+    async fn has_draft(&self, name: &str) -> Result<bool> {
+        self.metadata_storage.has_draft(name).await
+    }
+
     async fn publish_draft(&self, name: &str) -> Result<TemplateEntry> {
         // Get the draft
-        let draft = self.get_draft_template(name).await?
-            .ok_or_else(|| crate::RegistryError::TemplateNotFound(format!("No draft found for template {}", name)))?;
+        let draft = self
+            .metadata_storage
+            .get_draft(name)
+            .await?
+            .ok_or_else(|| {
+                crate::RegistryError::TemplateNotFound(format!(
+                    "No draft found for template {}",
+                    name
+                ))
+            })?;
 
-        // Get next version number
-        let next_version = self.metadata_storage.get_next_version_number(name).await?;
+        // Get next tag number
+        let next_tag = self
+            .metadata_storage
+            .get_next_tag_number(name)
+            .await?;
 
         // Create published version from draft
-        let published_ref = TemplateRef::new(name).with_tag(&format!("v{}", next_version));
-        let published_template = TemplateEntry::new(draft.template, published_ref, draft.author);
+        let published_template = draft.publish(format!("v{}", next_tag));
 
         // Save the published version
-        self.metadata_storage.save_template(&published_template).await?;
+        self.metadata_storage
+            .save_template_entry(&published_template)
+            .await?;
 
         // Delete the draft
-        self.delete_draft_template(name).await?;
+        self.metadata_storage.delete_draft(name).await?;
 
         Ok(published_template)
     }
@@ -285,10 +312,5 @@ impl DefaultRegistry {
     /// Access to file storage (for direct operations like PDF downloads)
     pub fn file_storage(&self) -> &Arc<dyn FileStorage> {
         &self.file_storage
-    }
-
-    /// Access to metadata storage (for draft operations)
-    pub fn metadata_storage(&self) -> &Arc<dyn MetadataStorage> {
-        &self.metadata_storage
     }
 }

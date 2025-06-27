@@ -8,6 +8,9 @@ pub enum RegistryError {
     #[error("Template not found: {0}")]
     TemplateNotFound(String),
     
+    #[error("Render job not found: {0}")]
+    RenderJobNotFound(String),
+    
     #[error("Version {version} not found for template {template_id}")]
     VersionNotFound { template_id: String, version: u64 },
     
