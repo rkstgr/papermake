@@ -1,32 +1,28 @@
 //! Core data structures for the papermake registry
 
-use papermake::{Template, TemplateId};
+use papermake::Template;
+use crate::template_ref::TemplateRef;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use time::OffsetDateTime;
 use uuid::Uuid;
+use sha2::{Sha256, Digest};
 
-/// A versioned template with registry metadata
+/// A template entry in the registry with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VersionedTemplate {
+pub struct TemplateEntry {
     /// The core template from papermake
     pub template: Template,
 
-    /// Machine-readable template name (e.g. "invoice-template")
-    pub template_name: String,
-
-    /// Human-readable display name (e.g. "Monthly Invoice Template")
-    pub display_name: String,
-
-    /// Version string (e.g. "v1", "v2", "latest", "draft")
-    pub version: String,
+    /// Docker-style template reference (org/name:tag@digest)
+    pub template_ref: TemplateRef,
 
     /// Author of this version (simple string identifier)
     pub author: String,
 
     /// If this template was forked, track the source
-    pub forked_from: Option<(String, String)>, // Changed to (template_name, version)
+    pub forked_from: Option<TemplateRef>,
 
     /// When this version was published
     #[serde(with = "time::serde::rfc3339")]
@@ -42,30 +38,31 @@ pub struct VersionedTemplate {
     pub schema: Option<HashMap<String, serde_json::Value>>,
 }
 
-impl VersionedTemplate {
-    /// Create a new published versioned template
-    pub fn new(template: Template, template_name: String, display_name: String, version: String, author: String) -> Self {
-        Self {
+impl TemplateEntry {
+    /// Create a new published template entry
+    pub fn new(template: Template, template_ref: TemplateRef, author: String) -> Self {
+        let mut entry = Self {
             template,
-            template_name,
-            display_name,
-            version,
+            template_ref,
             author,
             forked_from: None,
             published_at: OffsetDateTime::now_utc(),
             immutable: true,
             is_draft: false,
             schema: None,
-        }
+        };
+        
+        // Generate content digest
+        entry.generate_digest();
+        entry
     }
 
-    /// Create a new draft template
-    pub fn new_draft(template: Template, template_name: String, display_name: String, author: String) -> Self {
+    /// Create a new draft template entry
+    pub fn new_draft(template: Template, template_ref: TemplateRef, author: String) -> Self {
+        let draft_ref = template_ref.with_different_tag("draft");
         Self {
             template,
-            template_name,
-            display_name,
-            version: "draft".to_string(),
+            template_ref: draft_ref,
             author,
             forked_from: None,
             published_at: OffsetDateTime::now_utc(),
@@ -75,42 +72,42 @@ impl VersionedTemplate {
         }
     }
 
-    /// Create a forked template
+    /// Create a forked template entry
     pub fn forked_from(
         template: Template,
-        template_name: String,
-        display_name: String,
-        version: String,
+        template_ref: TemplateRef,
         author: String,
-        source: (String, String), // (template_name, version)
+        source: TemplateRef,
     ) -> Self {
-        Self {
+        let mut entry = Self {
             template,
-            template_name,
-            display_name,
-            version,
+            template_ref,
             author,
             forked_from: Some(source),
             published_at: OffsetDateTime::now_utc(),
             immutable: true,
             is_draft: false,
             schema: None,
-        }
+        };
+        
+        // Generate content digest
+        entry.generate_digest();
+        entry
     }
 
-    /// Get the template ID (for backward compatibility)
-    pub fn id(&self) -> &TemplateId {
-        &self.template.id
+    /// Get the template reference string
+    pub fn reference(&self) -> String {
+        self.template_ref.to_string()
     }
 
-    /// Get the template name:version identifier
-    pub fn name_version(&self) -> String {
-        format!("{}:{}", self.template_name, self.version)
+    /// Get the name:tag portion
+    pub fn name_tag(&self) -> String {
+        self.template_ref.name_tag()
     }
 
-    /// Check if this is the latest version tag
+    /// Check if this is the latest tag
     pub fn is_latest(&self) -> bool {
-        self.version == "latest"
+        self.template_ref.is_latest()
     }
 
     /// Check if this is a draft
@@ -118,12 +115,15 @@ impl VersionedTemplate {
         self.is_draft
     }
 
-    /// Promote draft to published version
-    pub fn publish(mut self, new_version: String) -> Self {
-        self.version = new_version;
+    /// Promote draft to published tag
+    pub fn publish(mut self, new_tag: String) -> Self {
+        self.template_ref = self.template_ref.with_different_tag(new_tag);
         self.is_draft = false;
         self.immutable = true;
         self.published_at = OffsetDateTime::now_utc();
+        
+        // Generate new digest for published version
+        self.generate_digest();
         self
     }
 
@@ -132,20 +132,32 @@ impl VersionedTemplate {
         self.schema = Some(schema);
         self
     }
+
+    /// Generate and set the content digest
+    pub fn generate_digest(&mut self) {
+        let content = format!(
+            "{}|{}|{:?}",
+            self.template.content,
+            serde_json::to_string(&self.template.schema).unwrap_or_default(),
+            self.schema
+        );
+        
+        let mut hasher = Sha256::new();
+        hasher.update(content.as_bytes());
+        let digest = format!("sha256:{:x}", hasher.finalize());
+        
+        self.template_ref = self.template_ref.with_content_digest(digest);
+    }
 }
 
 /// Render job tracking a PDF generation process
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RenderJob {
-    /// Unique job identifier
+    /// Unique job identifier (render_id)
     pub id: String,
 
-    /// Template identifier - supports both UUID (for backward compatibility) and name
-    pub template_id: TemplateId,
-    /// Template name (e.g. "invoice-template")
-    pub template_name: String,
-    /// Template version (e.g. "v1", "v2", "latest")
-    pub template_version: String,
+    /// Template reference for this render job
+    pub template_ref: TemplateRef,
 
     /// Input data for rendering
     pub data: serde_json::Value,
@@ -188,8 +200,8 @@ pub enum RenderStatus {
 }
 
 impl RenderJob {
-    /// Create a new render job with template name and version
-    pub fn new(template_id: TemplateId, template_name: String, template_version: String, data: serde_json::Value) -> Self {
+    /// Create a new render job with template reference
+    pub fn new(template_ref: TemplateRef, data: serde_json::Value) -> Self {
         // Generate data hash for caching
         let data_string = serde_json::to_string(&data).unwrap_or_default();
         let mut hasher = DefaultHasher::new();
@@ -198,9 +210,7 @@ impl RenderJob {
 
         Self {
             id: Uuid::new_v4().to_string(),
-            template_id,
-            template_name,
-            template_version,
+            template_ref,
             data,
             data_hash,
             status: RenderStatus::Pending,
@@ -210,12 +220,6 @@ impl RenderJob {
             completed_at: None,
             error_message: None,
         }
-    }
-
-    /// Create a new render job (backward compatibility with u64 version)
-    #[deprecated(note = "Use new() with String version instead")]
-    pub fn new_legacy(template_id: TemplateId, template_version: u64, data: serde_json::Value) -> Self {
-        Self::new(template_id.clone(), template_id.as_ref().to_string(), format!("v{}", template_version), data)
     }
 
     /// Mark job as in progress

@@ -124,13 +124,13 @@ async fn create_render(
 ) -> Result<impl IntoResponse> {
     info!(
         "Creating render job for template {:?} v{}",
-        request.template_id, request.template_version
+        request.template_id, request.template_tag
     );
 
     // Create render job through registry
     let render_job = state
         .registry
-        .render_template(&request.template_id, parse_version_to_u64(&request.template_version), &request.data)
+        .render_template(&request.template_id, parse_version_to_u64(&request.template_tag), &request.data)
         .await?;
 
     // Send job to worker for immediate processing
@@ -171,7 +171,7 @@ async fn get_render(
     let details = RenderJobDetails {
         id: job.id.clone(),
         template_id: job.template_id,
-        template_version: job.template_version,
+        template_tag: job.template_tag,
         data: job.data,
         data_hash: job.data_hash,
         status,
@@ -241,7 +241,7 @@ async fn retry_render(
     // Create a new render job with the same parameters
     let new_job = state
         .registry
-        .render_template(&job.template_id, parse_version_to_u64(&job.template_version), &job.data)
+        .render_template(&job.template_id, parse_version_to_u64(&job.template_tag), &job.data)
         .await?;
 
     // Send job to worker for immediate processing
@@ -282,7 +282,7 @@ async fn create_batch_render(
     for req in request.requests {
         match state
             .registry
-            .render_template(&req.template_id, parse_version_to_u64(&req.template_version), &req.data)
+            .render_template(&req.template_id, parse_version_to_u64(&req.template_tag), &req.data)
             .await
         {
             Ok(job) => {

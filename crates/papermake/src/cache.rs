@@ -1,7 +1,7 @@
 //! Template-level caching for improved performance
 
 use std::sync::{Arc, Mutex};
-use crate::{Template, TemplateId, PapermakeError, Result};
+use crate::{Template, PapermakeError, Result};
 use crate::render::{RenderResult, RenderOptions};
 use crate::typst::TypstWorld;
 
@@ -70,14 +70,9 @@ impl CachedTemplate {
         &self.template
     }
     
-    /// Get the template ID
-    pub fn id(&self) -> &TemplateId {
-        &self.template.id
-    }
-    
-    /// Get the template name
-    pub fn name(&self) -> &str {
-        &self.template.name
+    /// Get the template description
+    pub fn description(&self) -> Option<&str> {
+        self.template.description.as_deref()
     }
     
     /// Validate data against the template's schema

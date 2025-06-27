@@ -1,6 +1,6 @@
 //! Storage abstraction for registry data
 
-use crate::{entities::*, error::Result};
+use crate::{entities::*, error::Result, template_ref::TemplateRef};
 use async_trait::async_trait;
 // Re-export for convenience
 pub use papermake::FileError;
@@ -33,54 +33,53 @@ pub mod postgres;
 pub trait MetadataStorage: Send + Sync {
     // === Template Management ===
 
-    /// Save a versioned template
-    async fn save_versioned_template(&self, template: &VersionedTemplate) -> Result<()>;
+    /// Save a template entry
+    async fn save_template_entry(&self, template: &TemplateEntry) -> Result<()>;
 
-    /// Get a specific version of a template by name:version
-    async fn get_versioned_template_by_name(
+    /// Get a template entry by reference string
+    async fn get_template_entry(
         &self,
-        template_name: &str,
-        version: &str,
-    ) -> Result<VersionedTemplate>;
+        template_ref: &str,
+    ) -> Result<TemplateEntry>;
 
-    /// Get a specific version of a template by ID (for backward compatibility)
-    async fn get_versioned_template(
+    /// Get a template entry by name and tag
+    async fn get_template_entry_by_name_tag(
         &self,
-        id: &papermake::TemplateId,
-        version: u64,
-    ) -> Result<VersionedTemplate>;
+        name: &str,
+        tag: &str,
+    ) -> Result<TemplateEntry>;
 
-    /// List all versions for a template by name
-    async fn list_template_versions_by_name(&self, template_name: &str) -> Result<Vec<String>>;
+    /// List all tags for a template by name
+    async fn list_template_tags(&self, name: &str) -> Result<Vec<String>>;
 
-    /// List all versions for a template by ID (for backward compatibility)
-    async fn list_template_versions(&self, id: &papermake::TemplateId) -> Result<Vec<u64>>;
+    /// List all template entries for a given name
+    async fn list_template_entries(&self, name: &str) -> Result<Vec<TemplateEntry>>;
 
-    /// Delete a specific template version by name:version
-    async fn delete_template_version_by_name(&self, template_name: &str, version: &str) -> Result<()>;
+    /// Delete a specific template entry by reference
+    async fn delete_template_entry(&self, template_ref: &str) -> Result<()>;
 
-    /// Delete a specific template version by ID (for backward compatibility)
-    async fn delete_template_version(&self, id: &papermake::TemplateId, version: u64) -> Result<()>;
+    /// Delete a template entry by name and tag
+    async fn delete_template_entry_by_name_tag(&self, name: &str, tag: &str) -> Result<()>;
 
-    /// Search templates by name/description
-    async fn search_templates(&self, query: &str) -> Result<Vec<(papermake::TemplateId, u64)>>;
+    /// Search templates by name/description  
+    async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>>;
 
     // === Draft Management ===
 
-    /// Save a draft template
-    async fn save_draft(&self, template: &VersionedTemplate) -> Result<()>;
+    /// Save a draft template entry
+    async fn save_draft(&self, template: &TemplateEntry) -> Result<()>;
 
-    /// Get a draft template by name
-    async fn get_draft(&self, template_name: &str) -> Result<Option<VersionedTemplate>>;
+    /// Get a draft template entry by name
+    async fn get_draft(&self, name: &str) -> Result<Option<TemplateEntry>>;
 
-    /// Delete a draft template
-    async fn delete_draft(&self, template_name: &str) -> Result<()>;
+    /// Delete a draft template entry
+    async fn delete_draft(&self, name: &str) -> Result<()>;
 
     /// Check if a template has a draft
-    async fn has_draft(&self, template_name: &str) -> Result<bool>;
+    async fn has_draft(&self, name: &str) -> Result<bool>;
 
-    /// Get the latest published version number for auto-incrementing
-    async fn get_next_version_number(&self, template_name: &str) -> Result<u64>;
+    /// Get the next tag number for auto-incrementing (e.g., "v3" after "v2")
+    async fn get_next_tag_number(&self, name: &str) -> Result<u64>;
 
     // === Render Job Management ===
 
@@ -90,38 +89,36 @@ pub trait MetadataStorage: Send + Sync {
     /// Get a render job by ID
     async fn get_render_job(&self, job_id: &str) -> Result<RenderJob>;
 
-    /// Find render job by template name and data hash (for caching)
-    async fn find_render_job_by_hash_name(
-        &self,
-        template_name: &str,
-        version: &str,
-        data_hash: &str,
-    ) -> Result<Option<RenderJob>>;
-
-    /// Find render job by template ID and data hash (for backward compatibility)
+    /// Find render job by template reference and data hash (for caching)
     async fn find_render_job_by_hash(
         &self,
-        template_id: &papermake::TemplateId,
-        version: u64,
+        template_ref: &str,
         data_hash: &str,
     ) -> Result<Option<RenderJob>>;
 
-    /// List render jobs for a template by name
+    /// Find render job by template name, tag and data hash
+    async fn find_render_job_by_name_tag_hash(
+        &self,
+        name: &str,
+        tag: &str,
+        data_hash: &str,
+    ) -> Result<Option<RenderJob>>;
+
+    /// List render jobs for a template by reference
+    async fn list_render_jobs_by_template(
+        &self,
+        template_ref: &str,
+    ) -> Result<Vec<RenderJob>>;
+
+    /// List render jobs for a template by name and optional tag
     async fn list_render_jobs_by_name(
         &self,
-        template_name: &str,
-        version: Option<&str>,
+        name: &str,
+        tag: Option<&str>,
     ) -> Result<Vec<RenderJob>>;
 
-    /// List render jobs for a template by ID (for backward compatibility)
-    async fn list_render_jobs(
-        &self,
-        template_id: &papermake::TemplateId,
-        version: Option<u64>,
-    ) -> Result<Vec<RenderJob>>;
-
-    /// List all templates (latest version of each)
-    async fn list_all_templates(&self) -> Result<Vec<VersionedTemplate>>;
+    /// List all templates (latest tag of each)
+    async fn list_all_templates(&self) -> Result<Vec<TemplateEntry>>;
 
     /// List all render jobs
     async fn list_all_render_jobs(&self) -> Result<Vec<RenderJob>>;
@@ -157,18 +154,4 @@ pub trait TypstFileSystem: Send + Sync {
     async fn get_file(&self, path: &str) -> std::result::Result<Vec<u8>, papermake::FileError>;
 }
 
-/// Legacy trait for backward compatibility
-/// TODO: Remove after migration
-#[async_trait]
-pub trait RegistryStorage {
-    // Template operations
-    async fn save_versioned_template(&self, template: &VersionedTemplate) -> Result<()>;
-    async fn get_versioned_template(&self, id: &papermake::TemplateId, version: u64) -> Result<VersionedTemplate>;
-    async fn list_template_versions(&self, id: &papermake::TemplateId) -> Result<Vec<u64>>;
-    async fn delete_template_version(&self, id: &papermake::TemplateId, version: u64) -> Result<()>;
-    
-    // Asset operations
-    async fn save_template_asset(&self, template_id: &papermake::TemplateId, path: &str, content: &[u8]) -> Result<()>;
-    async fn get_template_asset(&self, template_id: &papermake::TemplateId, path: &str) -> Result<Vec<u8>>;
-    async fn list_template_assets(&self, template_id: &papermake::TemplateId) -> Result<Vec<String>>;
-}
+// Legacy trait removed - no backward compatibility needed

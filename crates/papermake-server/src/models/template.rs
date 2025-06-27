@@ -24,7 +24,7 @@ pub struct TemplateDetails {
     pub description: Option<String>,
     pub content: String,
     pub schema: Option<serde_json::Value>,
-    pub version: String,
+    pub tag: String,
     pub author: String,
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
@@ -47,7 +47,7 @@ impl From<VersionedTemplate> for TemplateDetails {
             description: vt.template.description,
             content: vt.template.content,
             schema,
-            version: vt.version,
+            tag: vt.tag,
             author: vt.author,
             published_at: vt.published_at,
             uses_total: 0, // Will be populated by analytics

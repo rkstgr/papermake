@@ -1,19 +1,19 @@
 //! Analytics and dashboard routes
 
 use crate::{
+    AppState,
     error::{ApiError, Result},
     models::{
-        ApiResponse, DashboardMetrics, TemplateUsage, PerformanceMetrics, AnalyticsQuery,
-        TemplateAnalytics, SystemHealth, RenderJobSummary, TemplateSummary, HealthStatus,
-        QueueHealth, StorageHealth,
+        AnalyticsQuery, ApiResponse, DashboardMetrics, HealthStatus, PerformanceMetrics,
+        QueueHealth, RenderJobSummary, StorageHealth, SystemHealth, TemplateAnalytics,
+        TemplateSummary, TemplateUsage,
     },
-    AppState,
 };
 use axum::{
+    Router,
     extract::{Path, Query, State},
     response::Json,
     routing::get,
-    Router,
 };
 use papermake_registry::{TemplateId, TemplateRegistry};
 use time::OffsetDateTime;
@@ -24,7 +24,10 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/dashboard", get(get_dashboard_metrics))
         .route("/templates/usage", get(get_template_usage))
-        .route("/templates/{template_id}/analytics", get(get_template_analytics))
+        .route(
+            "/templates/{template_id}/analytics",
+            get(get_template_analytics),
+        )
         .route("/performance", get(get_performance_metrics))
         .route("/health", get(get_system_health))
 }
@@ -50,7 +53,7 @@ async fn get_dashboard_metrics(
     // Calculate 24h metrics
     let now = OffsetDateTime::now_utc();
     let yesterday = now - time::Duration::hours(24);
-    
+
     let jobs_24h: Vec<_> = all_jobs
         .iter()
         .filter(|job| job.created_at >= yesterday)
@@ -80,7 +83,7 @@ async fn get_dashboard_metrics(
             .filter_map(|job| job.rendering_latency.map(|l| l as i64))
             .collect();
         latencies.sort();
-        
+
         if !latencies.is_empty() {
             let p90_index = (latencies.len() as f64 * 0.9) as usize;
             Some(latencies.get(p90_index).copied().unwrap_or(0))
@@ -94,7 +97,7 @@ async fn get_dashboard_metrics(
     // Get popular templates (simplified - count by template_id in last 24h)
     let mut template_usage_map = std::collections::HashMap::new();
     for job in &jobs_24h {
-        let key = (&job.template_id, job.template_version.clone());
+        let key = (&job.template_id, job.template_tag.clone());
         *template_usage_map.entry(key).or_insert(0) += 1;
     }
 
@@ -105,8 +108,8 @@ async fn get_dashboard_metrics(
             template_name: template_id.to_string(), // Would get actual name from registry
             version,
             uses_24h: count,
-            uses_7d: count, // Simplified
-            uses_30d: count, // Simplified
+            uses_7d: count,    // Simplified
+            uses_30d: count,   // Simplified
             uses_total: count, // Simplified
             published_at: now, // Would get actual date from registry
             avg_render_time_ms: None,
@@ -118,14 +121,14 @@ async fn get_dashboard_metrics(
     let all_templates = state.registry.list_templates().await?;
     let mut sorted_templates = all_templates;
     sorted_templates.sort_by(|a, b| b.published_at.cmp(&a.published_at));
-    
+
     let new_templates: Vec<TemplateSummary> = sorted_templates
         .into_iter()
         .take(5)
         .map(|vt| TemplateSummary {
             id: vt.template.id,
             name: vt.template.name,
-            latest_version: vt.version,
+            latest_version: vt.tag,
             uses_24h: 0, // Would calculate from jobs
             published_at: vt.published_at,
             author: vt.author,
@@ -181,7 +184,7 @@ async fn get_template_usage(
     // Group by template and calculate usage
     let mut usage_map = std::collections::HashMap::new();
     for job in filtered_jobs {
-        let key = (&job.template_id, job.template_version.clone());
+        let key = (&job.template_id, job.template_tag.clone());
         let entry = usage_map.entry(key).or_insert_with(|| {
             (0i64, Vec::new()) // (count, latencies)
         });
@@ -195,7 +198,10 @@ async fn get_template_usage(
         .into_iter()
         .map(|((template_id, version), (count, latencies))| {
             let avg_render_time_ms = if !latencies.is_empty() {
-                Some(latencies.iter().map(|&l| l as u64).sum::<u64>() as f64 / latencies.len() as f64)
+                Some(
+                    latencies.iter().map(|&l| l as u64).sum::<u64>() as f64
+                        / latencies.len() as f64,
+                )
             } else {
                 None
             };
@@ -228,20 +234,20 @@ async fn get_template_usage(
 /// Get analytics for a specific template
 async fn get_template_analytics(
     State(state): State<AppState>,
-    Path(template_id): Path<TemplateId>,
+    Path(template_name): Path<String>,
     Query(_query): Query<AnalyticsQuery>,
 ) -> Result<Json<ApiResponse<TemplateAnalytics>>> {
-    debug!("Getting analytics for template: {}", template_id);
+    debug!("Getting analytics for template: {}", template_name);
 
     // Get template versions
-    let versions = state.registry.list_versions(&template_id).await?;
+    let versions = state.registry.list_versions(&template_name).await?;
     let latest_version = versions.iter().max().copied().unwrap_or(1);
 
     // Get render jobs for this template
     let all_jobs = state.registry.list_render_jobs().await?;
     let template_jobs: Vec<_> = all_jobs
         .iter()
-        .filter(|job| job.template_id == template_id)
+        .filter(|job| job.template_name == template_name)
         .collect();
 
     // Calculate performance metrics
@@ -273,10 +279,8 @@ async fn get_template_analytics(
     let slowest_render_ms = latencies.iter().max().copied();
 
     // Calculate cache hit rate based on data hash duplicates
-    let unique_hashes: std::collections::HashSet<_> = template_jobs
-        .iter()
-        .map(|job| &job.data_hash)
-        .collect();
+    let unique_hashes: std::collections::HashSet<_> =
+        template_jobs.iter().map(|job| &job.data_hash).collect();
     let cache_hit_rate = if total_renders > 0 {
         1.0 - (unique_hashes.len() as f64 / total_renders as f64)
     } else {
@@ -319,8 +323,10 @@ async fn get_performance_metrics(
 
     // This would implement time-series analysis
     // For now, return a simplified response
-    
-    Err(ApiError::internal("Performance metrics not yet implemented"))
+
+    Err(ApiError::internal(
+        "Performance metrics not yet implemented",
+    ))
 }
 
 /// Get system health status
@@ -330,7 +336,7 @@ async fn get_system_health(
     debug!("Getting system health");
 
     let queue_depth = calculate_queue_depth(&state).await?;
-    
+
     // Test database connectivity
     let database_connected = match state.registry.list_templates().await {
         Ok(_) => true,
@@ -350,8 +356,8 @@ async fn get_system_health(
         },
         current_depth: queue_depth,
         max_depth_24h: queue_depth, // Would track over time
-        processing_rate: 0.0, // Would calculate
-        avg_wait_time_ms: 0.0, // Would calculate
+        processing_rate: 0.0,       // Would calculate
+        avg_wait_time_ms: 0.0,      // Would calculate
     };
 
     let storage_health = StorageHealth {
@@ -363,7 +369,7 @@ async fn get_system_health(
         database_connected,
         s3_connected,
         database_response_time_ms: None, // Would measure
-        s3_response_time_ms: None, // Would measure
+        s3_response_time_ms: None,       // Would measure
     };
 
     let overall_status = match (&queue_health.status, &storage_health.status) {
@@ -386,9 +392,6 @@ async fn get_system_health(
 /// Helper function to calculate current queue depth
 async fn calculate_queue_depth(state: &AppState) -> Result<i64> {
     let jobs = state.registry.list_render_jobs().await?;
-    let pending_jobs = jobs
-        .iter()
-        .filter(|job| job.completed_at.is_none())
-        .count();
+    let pending_jobs = jobs.iter().filter(|job| job.completed_at.is_none()).count();
     Ok(pending_jobs as i64)
 }

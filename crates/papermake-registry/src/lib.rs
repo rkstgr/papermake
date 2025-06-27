@@ -57,11 +57,13 @@ pub mod entities;
 pub mod error;
 pub mod registry;
 pub mod storage;
+pub mod template_ref;
 
 pub use entities::*;
 pub use error::*;
 pub use registry::*;
-pub use storage::{MetadataStorage, FileStorage, TypstFileSystem, RegistryStorage};
+pub use storage::{MetadataStorage, FileStorage, TypstFileSystem};
+pub use template_ref::*;
 
 #[cfg(feature = "sqlite")]
 pub use storage::sqlite_storage::SqliteStorage;
@@ -79,4 +81,4 @@ pub use storage::registry_filesystem::RegistryFileSystem;
 pub use storage::file_storage::FileSystemStorage;
 
 // Re-export commonly used papermake types
-pub use papermake::{RenderOptions, RenderResult, Template, TemplateBuilder, TemplateId};
+pub use papermake::{RenderOptions, RenderResult, Template, TemplateBuilder};

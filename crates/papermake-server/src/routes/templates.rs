@@ -20,18 +20,35 @@ use papermake::TemplateBuilder;
 use papermake_registry::{TemplateId, TemplateRegistry};
 use tracing::{debug, error, info};
 
+/// Helper function to parse name:tag format (e.g., "invoice-template:v2")
+fn parse_name_tag(name_tag: &str) -> Result<(String, String)> {
+    if let Some(colon_pos) = name_tag.find(':') {
+        let name = name_tag[..colon_pos].to_string();
+        let tag = name_tag[colon_pos + 1..].to_string();
+        Ok((name, tag))
+    } else {
+        Err(ApiError::validation("Invalid name:tag format. Expected format: 'template-name:tag'"))
+    }
+}
+
 /// Create template routes
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_templates).post(create_template))
-        .route("/{template_id}", get(get_template))
-        .route("/{template_id}/versions", get(list_template_versions))
-        .route("/{template_id}/versions/{version}", get(get_template_version))
+        // Legacy UUID-based routes (with /by-id/ prefix for clarity)
+        .route("/by-id/{template_id}", get(get_template_by_id))
+        .route("/by-id/{template_id}/versions", get(list_template_versions_by_id))
+        .route("/by-id/{template_id}/versions/{version}", get(get_template_version_by_id))
+        // Special endpoints that need to come before catch-all template name routes
+        .route("/preview", post(preview_template))
+        .route("/validate", post(validate_template))
+        // New name-based routes (catch template names that might contain colons)
+        .route("/{name_tag_param}", get(get_template_by_name_or_name_tag))
+        .route("/{template_name}/tags", get(list_template_tags_by_name))
+        .route("/{template_name}/tags/{tag}", get(get_template_tag_by_name))
         // Draft endpoints (by template name)
         .route("/{template_name}/draft", get(get_draft).put(save_draft).delete(delete_draft))
         .route("/{template_name}/draft/publish", post(publish_draft))
-        .route("/preview", post(preview_template))
-        .route("/validate", post(validate_template))
 }
 
 /// List all templates with pagination and search
@@ -75,7 +92,7 @@ async fn list_templates(
         .map(|vt| TemplateSummary {
             id: vt.template.id,
             name: vt.template.name,
-            latest_version: vt.version,
+            latest_version: vt.tag,
             uses_24h: 0, // TODO: Get from analytics
             published_at: vt.published_at,
             author: vt.author,
@@ -92,17 +109,38 @@ async fn list_templates(
     Ok(Json(response))
 }
 
-/// Get a specific template (latest version)
-async fn get_template(
+/// Get a specific template by UUID (latest version) - Legacy endpoint
+async fn get_template_by_id(
     State(state): State<AppState>,
     Path(template_id): Path<TemplateId>,
 ) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template: {:?}", template_id);
+    debug!("Getting template by ID: {:?}", template_id);
 
     let template = state.registry.get_latest_template(&template_id).await?;
     let details = TemplateDetails::from(template);
 
     Ok(Json(ApiResponse::new(details)))
+}
+
+/// Get a template by name or name:tag format
+async fn get_template_by_name_or_name_tag(
+    State(state): State<AppState>,
+    Path(name_tag_param): Path<String>,
+) -> Result<Json<ApiResponse<TemplateDetails>>> {
+    debug!("Getting template by name or name:tag: {}", name_tag_param);
+
+    // Check if this is a name:tag format
+    if name_tag_param.contains(':') {
+        let (template_name, tag) = parse_name_tag(&name_tag_param)?;
+        let template = state.registry.get_template_by_name(&template_name, &tag).await?;
+        let details = TemplateDetails::from(template);
+        Ok(Json(ApiResponse::new(details)))
+    } else {
+        // Treat as template name, get latest tag
+        let template = state.registry.get_latest_template_by_name(&name_tag_param).await?;
+        let details = TemplateDetails::from(template);
+        Ok(Json(ApiResponse::new(details)))
+    }
 }
 
 /// Create a new template
@@ -132,26 +170,51 @@ async fn create_template(
     Ok((StatusCode::CREATED, Json(ApiResponse::new(details))))
 }
 
-/// List all versions of a template
-async fn list_template_versions(
+/// List all versions of a template by UUID - Legacy endpoint
+async fn list_template_versions_by_id(
     State(state): State<AppState>,
     Path(template_id): Path<TemplateId>,
 ) -> Result<Json<ApiResponse<Vec<u64>>>> {
-    debug!("Listing versions for template: {:?}", template_id);
+    debug!("Listing versions for template ID: {:?}", template_id);
 
     let versions = state.registry.list_versions(&template_id).await?;
 
     Ok(Json(ApiResponse::new(versions)))
 }
 
-/// Get a specific version of a template
-async fn get_template_version(
+/// List all tags of a template by name
+async fn list_template_tags_by_name(
+    State(state): State<AppState>,
+    Path(template_name): Path<String>,
+) -> Result<Json<ApiResponse<Vec<String>>>> {
+    debug!("Listing tags for template: {}", template_name);
+
+    let tags = state.registry.list_tags_by_name(&template_name).await?;
+
+    Ok(Json(ApiResponse::new(tags)))
+}
+
+/// Get a specific version of a template by UUID - Legacy endpoint
+async fn get_template_version_by_id(
     State(state): State<AppState>,
     Path((template_id, version)): Path<(TemplateId, u64)>,
 ) -> Result<Json<ApiResponse<TemplateDetails>>> {
     debug!("Getting template {:?} version {}", template_id, version);
 
     let template = state.registry.get_template(&template_id, version).await?;
+    let details = TemplateDetails::from(template);
+
+    Ok(Json(ApiResponse::new(details)))
+}
+
+/// Get a specific tag of a template by name
+async fn get_template_tag_by_name(
+    State(state): State<AppState>,
+    Path((template_name, tag)): Path<(String, String)>,
+) -> Result<Json<ApiResponse<TemplateDetails>>> {
+    debug!("Getting template {} tag {}", template_name, tag);
+
+    let template = state.registry.get_template_by_name(&template_name, &tag).await?;
     let details = TemplateDetails::from(template);
 
     Ok(Json(ApiResponse::new(details)))

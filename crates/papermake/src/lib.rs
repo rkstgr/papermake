@@ -13,7 +13,7 @@ pub use cache::{CachedTemplate, TemplateCache};
 pub use error::{PapermakeError, Result};
 pub use render::{RenderOptions, RenderResult, render_pdf};
 pub use schema::{FieldType, Schema, SchemaBuilder, SchemaField};
-pub use template::{Template, TemplateBuilder, TemplateId};
+pub use template::{Template, TemplateBuilder};
 pub use typst::{TypstFileSystem, TypstWorld};
 
 // Re-export typst types needed by papermake-registry

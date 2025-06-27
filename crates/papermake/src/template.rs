@@ -5,43 +5,9 @@ use serde::{Serialize, Deserialize};
 use crate::error::{PapermakeError, Result};
 use crate::schema::Schema;
 
-/// Unique identifier for a template
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-pub struct TemplateId(pub String);
-
-impl std::fmt::Display for TemplateId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl From<String> for TemplateId {
-    fn from(s: String) -> Self {
-        TemplateId(s)
-    }
-}
-
-impl From<&str> for TemplateId {
-    fn from(s: &str) -> Self {
-        TemplateId(s.to_string())
-    }
-}
-
-impl AsRef<str> for TemplateId {
-    fn as_ref(&self) -> &str {
-        &self.0
-    }
-}
-
-/// A template for PDF generation
+/// A template for PDF generation (core content only)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Template {
-    /// Unique identifier
-    pub id: TemplateId,
-    
-    /// Human-readable name
-    pub name: String,
-    
     /// Typst markdown content
     pub content: String,
     
@@ -50,34 +16,21 @@ pub struct Template {
     
     /// Optional description
     pub description: Option<String>,
-    
-    /// Creation timestamp
-    #[serde(with = "time::serde::rfc3339")]
-    pub created_at: time::OffsetDateTime,
-    
-    /// Last update timestamp
-    #[serde(with = "time::serde::rfc3339")]
-    pub updated_at: time::OffsetDateTime,
 }
 
 impl Template {
     /// Create a new template
-    pub fn new(id: impl Into<TemplateId>, name: impl Into<String>, content: impl Into<String>, schema: Schema) -> Self {
-        let now = time::OffsetDateTime::now_utc();
+    pub fn new(content: impl Into<String>, schema: Schema) -> Self {
         Template {
-            id: id.into(),
-            name: name.into(),
             content: content.into(),
             schema,
             description: None,
-            created_at: now,
-            updated_at: now,
         }
     }
     
     /// Create a new template builder
-    pub fn builder(id: impl Into<TemplateId>) -> TemplateBuilder {
-        TemplateBuilder::new(id.into())
+    pub fn builder() -> TemplateBuilder {
+        TemplateBuilder::new()
     }
     
     /// Set the description
@@ -111,7 +64,7 @@ impl Template {
         crate::render::render_pdf_with_cache(self, data, world_cache, Some(options))
     }
     
-    pub fn from_file_content(id: impl Into<TemplateId>, content: &str) -> Result<Self> {
+    pub fn from_file_content(content: &str) -> Result<Self> {
         // This is a simplified implementation
         // In a real implementation, you'd parse frontmatter for metadata
         // and extract the schema definition
@@ -131,13 +84,9 @@ impl Template {
         let schema = Schema::default();
         
         Ok(Template {
-            id: id.into(),
-            name: "".to_string(), // TODO: extract from frontmatter
             content: template_content,
             schema,
             description: None,
-            created_at: time::OffsetDateTime::now_utc(),
-            updated_at: time::OffsetDateTime::now_utc(),
         })
     }
     
@@ -147,16 +96,13 @@ impl Template {
         let content = std::fs::read_to_string(path.as_ref())
             .map_err(|e| PapermakeError::Io(e))?;
         
-        let id = path.as_ref().file_stem().unwrap().to_string_lossy().to_string();
-        Self::from_file_content(id, &content)
+        Self::from_file_content(&content)
     }
 }
 
 /// Builder for creating templates with a fluent API
 #[derive(Debug)]
 pub struct TemplateBuilder {
-    id: TemplateId,
-    name: Option<String>,
     content: Option<String>,
     schema: Option<Schema>,
     description: Option<String>,
@@ -164,20 +110,12 @@ pub struct TemplateBuilder {
 
 impl TemplateBuilder {
     /// Create a new template builder
-    pub fn new(id: TemplateId) -> Self {
+    pub fn new() -> Self {
         TemplateBuilder {
-            id,
-            name: None,
             content: None,
             schema: None,
             description: None,
         }
-    }
-    
-    /// Set the template name
-    pub fn name(mut self, name: impl Into<String>) -> Self {
-        self.name = Some(name.into());
-        self
     }
     
     /// Set the template content
@@ -208,19 +146,13 @@ impl TemplateBuilder {
     
     /// Build the template
     pub fn build(self) -> Result<Template> {
-        let name = self.name.ok_or_else(|| PapermakeError::Template("Template name is required".to_string()))?;
         let content = self.content.ok_or_else(|| PapermakeError::Template("Template content is required".to_string()))?;
         let schema = self.schema.unwrap_or_default();
         
-        let now = time::OffsetDateTime::now_utc();
         Ok(Template {
-            id: self.id,
-            name,
             content,
             schema,
             description: self.description,
-            created_at: now,
-            updated_at: now,
         })
     }
     
@@ -232,10 +164,9 @@ impl TemplateBuilder {
     
     /// Convenience method for AWS Lambda and similar scenarios: parse raw content directly into a cached template
     /// This is useful when you have template content from S3, databases, etc. and want immediate caching
-    pub fn from_raw_content_cached(id: impl Into<TemplateId>, content: impl Into<String>) -> Result<crate::cache::CachedTemplate> {
+    pub fn from_raw_content_cached(content: impl Into<String>) -> Result<crate::cache::CachedTemplate> {
         use crate::cache::TemplateCache;
-        let template = Self::new(id.into())
-            .name("Generated Template") // Default name
+        let template = Self::new()
             .content(content)
             .build()?;
         Ok(template.with_cache())

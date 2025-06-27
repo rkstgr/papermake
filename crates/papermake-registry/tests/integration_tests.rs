@@ -2,18 +2,16 @@
 
 use papermake::TemplateBuilder;
 use papermake_registry::*;
+use papermake_registry::storage::{MetadataStorage, sqlite_storage::SqliteStorage};
 use tempfile::tempdir;
 
 #[tokio::test]
-async fn test_basic_registry_workflow() {
-    // Create temporary directory for test
+async fn test_basic_sqlite_storage_workflow() {
+    // Create temporary directory for test database
     let temp_dir = tempdir().unwrap();
-    let storage = FileSystemStorage::new(temp_dir.path()).await.unwrap();
-    let registry = DefaultRegistry::new(storage);
-
-    // Create a test user
-    let user = User::new("alice", "alice@example.com");
-    registry.save_user(&user).await.unwrap();
+    let db_path = format!("sqlite:{}/test.db", temp_dir.path().display());
+    
+    let storage = SqliteStorage::new(&db_path).await.unwrap();
 
     // Create a simple template
     let template = TemplateBuilder::new("test-template".into())
@@ -22,245 +20,396 @@ async fn test_basic_registry_workflow() {
         .build()
         .unwrap();
 
-    // Publish the template
-    let version = registry
-        .publish_template(template, &user.id, TemplateScope::User(user.id.clone()))
+    // Create a versioned template with tag "v1"
+    let versioned_template = VersionedTemplate::new(
+        template,
+        "test-template".to_string(),
+        "Test Template Display".to_string(),
+        "v1".to_string(),
+        "alice".to_string(),
+    );
+
+    // Save the template
+    storage.save_versioned_template(&versioned_template).await.unwrap();
+
+    // Retrieve the template by name and tag
+    let retrieved = storage
+        .get_versioned_template_by_name("test-template", "v1")
         .await
         .unwrap();
 
-    assert_eq!(version, 1);
-
-    // Retrieve the template
-    let retrieved = registry
-        .get_template(&"test-template".into(), Some(version))
-        .await
-        .unwrap();
-
-    assert_eq!(retrieved.version, 1);
+    assert_eq!(retrieved.tag, "v1");
     assert_eq!(retrieved.template.name, "Test Template");
-    assert_eq!(retrieved.author, user.id);
-    assert!(matches!(retrieved.scope, TemplateScope::User(_)));
-
-    // Test access control
-    let can_access = registry
-        .can_access(&"test-template".into(), version, &user.id)
-        .await
-        .unwrap();
-
-    assert!(can_access);
-
-    // Create another user who shouldn't have access
-    let other_user = User::new("bob", "bob@example.com");
-    registry.save_user(&other_user).await.unwrap();
-
-    let cannot_access = registry
-        .can_access(&"test-template".into(), version, &other_user.id)
-        .await
-        .unwrap();
-
-    assert!(!cannot_access);
+    assert_eq!(retrieved.author, "alice");
+    assert_eq!(retrieved.template_name, "test-template");
+    assert_eq!(retrieved.display_name, "Test Template Display");
 }
 
 #[tokio::test]
-async fn test_template_versioning() {
+async fn test_template_tagging_and_versioning() {
     let temp_dir = tempdir().unwrap();
-    let storage = FileSystemStorage::new(temp_dir.path()).await.unwrap();
-    let registry = DefaultRegistry::new(storage);
+    let db_path = format!("sqlite:{}/test.db", temp_dir.path().display());
+    
+    let storage = SqliteStorage::new(&db_path).await.unwrap();
 
-    let user = User::new("alice", "alice@example.com");
-    registry.save_user(&user).await.unwrap();
+    let template_name = "versioned-template";
 
-    // Publish version 1
-    let template_v1 = TemplateBuilder::new("versioned-template".into())
+    // Publish tag v1
+    let template_v1 = TemplateBuilder::new("versioned-template-v1".into())
         .name("Versioned Template v1")
         .content("Version 1 content")
         .build()
         .unwrap();
 
-    let version_1 = registry
-        .publish_template(template_v1, &user.id, TemplateScope::User(user.id.clone()))
-        .await
-        .unwrap();
+    let versioned_template_v1 = VersionedTemplate::new(
+        template_v1,
+        template_name.to_string(),
+        "Versioned Template v1".to_string(),
+        "v1".to_string(),
+        "alice".to_string(),
+    );
 
-    assert_eq!(version_1, 1);
+    storage.save_versioned_template(&versioned_template_v1).await.unwrap();
 
-    // Publish version 2
-    let template_v2 = TemplateBuilder::new("versioned-template".into())
+    // Publish tag v2
+    let template_v2 = TemplateBuilder::new("versioned-template-v2".into())
         .name("Versioned Template v2")
         .content("Version 2 content")
         .build()
         .unwrap();
 
-    let version_2 = registry
-        .publish_template(template_v2, &user.id, TemplateScope::User(user.id.clone()))
+    let versioned_template_v2 = VersionedTemplate::new(
+        template_v2,
+        template_name.to_string(),
+        "Versioned Template v2".to_string(),
+        "v2".to_string(),
+        "alice".to_string(),
+    );
+
+    storage.save_versioned_template(&versioned_template_v2).await.unwrap();
+
+    // List all tags for the template
+    let tags = storage
+        .list_template_tags_by_name(template_name)
         .await
         .unwrap();
 
-    assert_eq!(version_2, 2);
+    assert_eq!(tags, vec!["v1".to_string(), "v2".to_string()]);
 
-    // Get latest version
-    let latest = registry
-        .get_latest_version(&"versioned-template".into())
+    // Get specific tags
+    let v1 = storage
+        .get_versioned_template_by_name(template_name, "v1")
         .await
         .unwrap();
 
-    assert_eq!(latest, 2);
-
-    // List all versions
-    let versions = registry
-        .list_versions(&"versioned-template".into())
-        .await
-        .unwrap();
-
-    assert_eq!(versions, vec![1, 2]);
-
-    // Get specific versions
-    let v1 = registry
-        .get_template(&"versioned-template".into(), Some(1))
-        .await
-        .unwrap();
-
-    let v2 = registry
-        .get_template(&"versioned-template".into(), Some(2))
+    let v2 = storage
+        .get_versioned_template_by_name(template_name, "v2")
         .await
         .unwrap();
 
     assert_eq!(v1.template.content, "Version 1 content");
     assert_eq!(v2.template.content, "Version 2 content");
-    assert_eq!(v1.version, 1);
-    assert_eq!(v2.version, 2);
+    assert_eq!(v1.tag, "v1");
+    assert_eq!(v2.tag, "v2");
+}
+
+#[tokio::test]
+async fn test_draft_workflow() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = format!("sqlite:{}/test.db", temp_dir.path().display());
+    
+    let storage = SqliteStorage::new(&db_path).await.unwrap();
+
+    let template_name = "draft-template";
+
+    // Create a draft template
+    let template = TemplateBuilder::new("draft-template-id".into())
+        .name("Draft Template")
+        .content("Draft content")
+        .build()
+        .unwrap();
+
+    let draft_template = VersionedTemplate::new_draft(
+        template,
+        template_name.to_string(),
+        "Draft Template Display".to_string(),
+        "alice".to_string(),
+    );
+
+    // Save the draft
+    storage.save_draft(&draft_template).await.unwrap();
+
+    // Check if draft exists
+    let has_draft = storage.has_draft(template_name).await.unwrap();
+    assert!(has_draft);
+
+    // Get the draft
+    let retrieved_draft = storage.get_draft(template_name).await.unwrap();
+    assert!(retrieved_draft.is_some());
+    
+    let draft = retrieved_draft.unwrap();
+    assert_eq!(draft.tag, "draft");
+    assert_eq!(draft.template.content, "Draft content");
+    assert!(draft.is_draft);
+
+    // Get next tag number (should be 1 since no published versions exist)
+    let next_tag_num = storage.get_next_tag_number(template_name).await.unwrap();
+    assert_eq!(next_tag_num, 1);
+
+    // Publish the draft as v1
+    let published_template = draft.publish("v1".to_string());
+    storage.save_versioned_template(&published_template).await.unwrap();
+
+    // Verify the draft still exists before deletion
+    let draft_still_exists = storage.has_draft(template_name).await.unwrap();
+    assert!(draft_still_exists, "Draft should still exist after publishing");
+
+    // Delete the draft
+    storage.delete_draft(template_name).await.unwrap();
+
+    // Verify draft is gone
+    let has_draft_after = storage.has_draft(template_name).await.unwrap();
+    assert!(!has_draft_after);
+
+    // Verify published version exists
+    let published = storage
+        .get_versioned_template_by_name(template_name, "v1")
+        .await
+        .unwrap();
+    
+    assert_eq!(published.tag, "v1");
+    assert_eq!(published.template.content, "Draft content");
+    assert!(!published.is_draft);
 }
 
 #[tokio::test]
 async fn test_template_forking() {
     let temp_dir = tempdir().unwrap();
-    let storage = FileSystemStorage::new(temp_dir.path()).await.unwrap();
-    let registry = DefaultRegistry::new(storage);
+    let db_path = format!("sqlite:{}/test.db", temp_dir.path().display());
+    
+    let storage = SqliteStorage::new(&db_path).await.unwrap();
 
-    // Create original author
-    let original_author = User::new("alice", "alice@example.com");
-    registry.save_user(&original_author).await.unwrap();
-
-    // Create someone who will fork
-    let forker = User::new("bob", "bob@example.com");
-    registry.save_user(&forker).await.unwrap();
-
-    // Publish original template as public so bob can access it
-    let original_template = TemplateBuilder::new("original-template".into())
+    // Create original template
+    let original_template = TemplateBuilder::new("original-template-id".into())
         .name("Original Template")
         .content("Original content")
         .build()
         .unwrap();
 
-    let original_version = registry
-        .publish_template(original_template, &original_author.id, TemplateScope::Public)
+    let original_versioned = VersionedTemplate::new(
+        original_template,
+        "original-template".to_string(),
+        "Original Template".to_string(),
+        "v1".to_string(),
+        "alice".to_string(),
+    );
+
+    storage.save_versioned_template(&original_versioned).await.unwrap();
+
+    // Fork the template
+    let forked_template = TemplateBuilder::new("forked-template-id".into())
+        .name("Forked Template")
+        .content("Original content") // Same content as original
+        .build()
+        .unwrap();
+
+    let forked_versioned = VersionedTemplate::forked_from(
+        forked_template,
+        "forked-template".to_string(),
+        "Forked Template".to_string(),
+        "v1".to_string(),
+        "bob".to_string(),
+        ("original-template".to_string(), "v1".to_string()),
+    );
+
+    storage.save_versioned_template(&forked_versioned).await.unwrap();
+
+    // Verify fork attribution
+    let retrieved_fork = storage
+        .get_versioned_template_by_name("forked-template", "v1")
         .await
         .unwrap();
 
-    // Fork the template
-    let forked_version = registry
-        .fork_template(
-            &"original-template".into(),
-            original_version,
-            &"forked-template".into(),
-            &forker.id,
-            TemplateScope::User(forker.id.clone()),
+    assert_eq!(retrieved_fork.author, "bob");
+    assert_eq!(retrieved_fork.template.content, "Original content");
+    assert_eq!(
+        retrieved_fork.forked_from,
+        Some(("original-template".to_string(), "v1".to_string()))
+    );
+    assert_eq!(retrieved_fork.template_name, "forked-template");
+}
+
+#[tokio::test]
+async fn test_render_job_workflow() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = format!("sqlite:{}/test.db", temp_dir.path().display());
+    
+    let storage = SqliteStorage::new(&db_path).await.unwrap();
+
+    // Create a template first
+    let template = TemplateBuilder::new("render-template".into())
+        .name("Render Template")
+        .content("Hello #data.name!")
+        .build()
+        .unwrap();
+
+    let versioned_template = VersionedTemplate::new(
+        template.clone(),
+        "render-template".to_string(),
+        "Render Template".to_string(),
+        "v1".to_string(),
+        "alice".to_string(),
+    );
+
+    storage.save_versioned_template(&versioned_template).await.unwrap();
+
+    // Create render job data
+    let render_data = serde_json::json!({"name": "World"});
+
+    // Create a render job
+    let render_job = RenderJob::new(
+        template.id.clone(),
+        "render-template".to_string(),
+        "v1".to_string(),
+        render_data.clone(),
+    );
+
+    let job_id = render_job.id.clone();
+
+    // Save the render job
+    storage.save_render_job(&render_job).await.unwrap();
+
+    // Retrieve the render job
+    let retrieved_job = storage.get_render_job(&job_id).await.unwrap();
+
+    assert_eq!(retrieved_job.id, job_id);
+    assert_eq!(retrieved_job.template_id, template.id);
+    assert_eq!(retrieved_job.template_tag, "v1");
+    assert_eq!(retrieved_job.template_name, "render-template");
+    assert_eq!(retrieved_job.data, render_data);
+    assert_eq!(retrieved_job.status, RenderStatus::Pending);
+}
+
+#[tokio::test]
+async fn test_registry_integration() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = format!("sqlite:{}/test.db", temp_dir.path().display());
+    
+    // Create storage backends
+    let metadata_storage = std::sync::Arc::new(SqliteStorage::new(&db_path).await.unwrap());
+    // For tests, we can use a simple in-memory file storage
+    let file_storage = std::sync::Arc::new(InMemoryFileStorage::new());
+    
+    let registry = DefaultRegistry::new(metadata_storage, file_storage);
+
+    // Create a template
+    let template = TemplateBuilder::new("registry-test".into())
+        .name("Registry Test Template")
+        .content("Registry test content")
+        .build()
+        .unwrap();
+
+    // Publish the template through the registry
+    let published_template = registry
+        .publish_template(template, "alice".to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(published_template.tag, "v1");
+    assert_eq!(published_template.author, "alice");
+
+    // Get the template back through the registry
+    let retrieved = registry
+        .get_template_by_name("registry-test", "v1")
+        .await
+        .unwrap();
+
+    assert_eq!(retrieved.template.name, "Registry Test Template");
+    assert_eq!(retrieved.template.content, "Registry test content");
+
+    // Test draft workflow
+    let draft_template = TemplateBuilder::new("registry-test".into())
+        .name("Registry Test Template")
+        .content("Updated draft content")
+        .build()
+        .unwrap();
+
+    // Save as draft
+    let saved_draft = registry
+        .save_draft(
+            draft_template,
+            "registry-test".to_string(),
+            "Registry Test Template".to_string(),
+            "alice".to_string(),
         )
         .await
         .unwrap();
 
-    assert_eq!(forked_version, 1); // Forks start at version 1
+    assert_eq!(saved_draft.tag, "draft");
+    assert!(saved_draft.is_draft);
 
-    // Verify fork attribution
-    let forked_template = registry
-        .get_template(&"forked-template".into(), Some(forked_version))
+    // Publish the draft
+    let published_v2 = registry
+        .publish_draft("registry-test")
         .await
         .unwrap();
 
-    assert_eq!(forked_template.author, forker.id);
-    assert_eq!(forked_template.template.content, "Original content");
-    assert_eq!(
-        forked_template.forked_from,
-        Some(("original-template".into(), original_version))
-    );
+    assert_eq!(published_v2.tag, "v2");
+    assert_eq!(published_v2.template.content, "Updated draft content");
+    assert!(!published_v2.is_draft);
 
-    // Forked template should have its own ID but same content
-    assert_eq!(forked_template.template.id, "forked-template".into());
+    // List tags
+    let tags = registry
+        .list_tags_by_name("registry-test")
+        .await
+        .unwrap();
+
+    assert_eq!(tags, vec!["v1".to_string(), "v2".to_string()]);
 }
 
-#[tokio::test]
-async fn test_template_scopes() {
-    let temp_dir = tempdir().unwrap();
-    let storage = FileSystemStorage::new(temp_dir.path()).await.unwrap();
-    let registry = DefaultRegistry::new(storage);
-
-    // Create users and org
-    let alice = User::with_id("alice", "alice", "alice@company.com");
-    let bob = User::with_id("bob", "bob", "bob@company.com");
-    let charlie = User::with_id("charlie", "charlie", "charlie@external.com");
-
-    registry.save_user(&alice).await.unwrap();
-    registry.save_user(&bob).await.unwrap();
-    registry.save_user(&charlie).await.unwrap();
-
-    // Test user scope access
-    let user_scope = TemplateScope::User(alice.id.clone());
-    assert!(user_scope.can_access(&alice));
-    assert!(!user_scope.can_access(&bob));
-    assert!(!user_scope.can_access(&charlie));
-
-    // Test public scope access
-    let public_scope = TemplateScope::Public;
-    assert!(public_scope.can_access(&alice));
-    assert!(public_scope.can_access(&bob));
-    assert!(public_scope.can_access(&charlie));
-
-    // Test marketplace scope access
-    let marketplace_scope = TemplateScope::Marketplace;
-    assert!(marketplace_scope.can_access(&alice));
-    assert!(marketplace_scope.can_access(&bob));
-    assert!(marketplace_scope.can_access(&charlie));
+// Simple in-memory file storage for testing
+struct InMemoryFileStorage {
+    files: std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
 }
 
-#[tokio::test]
-async fn test_user_templates_listing() {
-    let temp_dir = tempdir().unwrap();
-    let storage = FileSystemStorage::new(temp_dir.path()).await.unwrap();
-    let registry = DefaultRegistry::new(storage);
+impl InMemoryFileStorage {
+    fn new() -> Self {
+        Self {
+            files: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+}
 
-    let user = User::new("alice", "alice@example.com");
-    registry.save_user(&user).await.unwrap();
+#[async_trait::async_trait]
+impl papermake_registry::storage::FileStorage for InMemoryFileStorage {
+    async fn put_file(&self, key: &str, content: &[u8]) -> papermake_registry::error::Result<()> {
+        self.files.lock().unwrap().insert(key.to_string(), content.to_vec());
+        Ok(())
+    }
 
-    // Publish multiple templates
-    let template1 = TemplateBuilder::new("template-1".into())
-        .name("Template 1")
-        .content("Content 1")
-        .build()
-        .unwrap();
+    async fn get_file(&self, key: &str) -> papermake_registry::error::Result<Vec<u8>> {
+        self.files.lock().unwrap()
+            .get(key)
+            .cloned()
+            .ok_or_else(|| papermake_registry::RegistryError::Storage(format!("File not found: {}", key)))
+    }
 
-    let template2 = TemplateBuilder::new("template-2".into())
-        .name("Template 2")
-        .content("Content 2")
-        .build()
-        .unwrap();
+    async fn file_exists(&self, key: &str) -> papermake_registry::error::Result<bool> {
+        Ok(self.files.lock().unwrap().contains_key(key))
+    }
 
-    registry
-        .publish_template(template1, &user.id, TemplateScope::User(user.id.clone()))
-        .await
-        .unwrap();
+    async fn delete_file(&self, key: &str) -> papermake_registry::error::Result<()> {
+        self.files.lock().unwrap().remove(key);
+        Ok(())
+    }
 
-    registry
-        .publish_template(template2, &user.id, TemplateScope::User(user.id.clone()))
-        .await
-        .unwrap();
-
-    // List user templates
-    let user_templates = registry.list_user_templates(&user.id).await.unwrap();
-
-    assert_eq!(user_templates.len(), 2);
-    
-    // Check that both templates are present (order not guaranteed)
-    let template_ids: Vec<_> = user_templates.iter().map(|(id, _)| id.as_ref()).collect();
-    assert!(template_ids.contains(&"template-1"));
-    assert!(template_ids.contains(&"template-2"));
+    async fn list_files(&self, prefix: &str) -> papermake_registry::error::Result<Vec<String>> {
+        let files = self.files.lock().unwrap();
+        let matching_files: Vec<String> = files
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+        Ok(matching_files)
+    }
 }

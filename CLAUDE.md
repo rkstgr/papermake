@@ -155,3 +155,60 @@ When using PostgreSQL storage:
 - Keep commit messages focused on the technical changes made
 - Use conventional commit format: `type: description`
 - Prefer concise, less verbose commit messages that explain the core change
+
+## Current Development Status
+
+### Draft-Based Template Editing (In Progress)
+
+**Completed Tasks:**
+- ✅ **Database Schema Updates**: Updated SQLite storage to support name:version identification with new columns:
+  - `template_name` (e.g., "invoice-template") 
+  - `display_name` (e.g., "Monthly Invoice Template")
+  - `version` (e.g., "v1", "v2", "draft")
+  - `is_draft` boolean flag
+  - Primary key changed to `(template_name, version)`
+
+- ✅ **Entity Model Restructuring**: Completely updated `VersionedTemplate` and `RenderJob` entities to use String versions instead of u64, added draft support fields
+
+- ✅ **Storage Layer Extensions**: Added comprehensive draft management methods to `MetadataStorage` trait:
+  - `save_draft()`, `get_draft()`, `delete_draft()`, `has_draft()`
+  - `get_next_version_number()` for auto-incrementing
+  - `get_versioned_template_by_name()` for name:version lookups
+
+- ✅ **Registry Interface Updates**: Extended `TemplateRegistry` trait with draft workflow methods and implemented in `DefaultRegistry`
+
+- ✅ **Server API Endpoints**: Added complete draft management endpoints:
+  - `GET /api/templates/{template_name}/draft` - Retrieve draft
+  - `PUT /api/templates/{template_name}/draft` - Save/update draft
+  - `DELETE /api/templates/{template_name}/draft` - Delete draft
+  - `POST /api/templates/{template_name}/draft/publish` - Publish draft as new version
+
+- ✅ **Compilation Fixes**: Resolved all type conversion issues when changing from u64 to String versions, added `parse_version_to_u64()` helper functions for backward compatibility
+
+**Pending Tasks:**
+- 🔄 **Update existing server API routes** to support name:version URL structure (e.g., `/api/templates/invoice-template:v1` instead of `/api/templates/{uuid}`)
+- 🔄 **Update frontend API client** to support draft methods and new URL patterns
+- 🔄 **Overhaul template editor** to implement draft-first workflow where editing creates drafts automatically
+- 🔄 **Update frontend URL routing** from UUID-based to name-based
+- 🔄 **Create data migration scripts** for existing templates to convert UUID-based to name:version format
+
+**Technical Implementation Details:**
+- **Version Format**: Following Docker-style versioning (e.g., "v1", "v2", "latest", "draft")
+- **Database Schema**: Uses `(template_name, version)` as primary key with backward compatibility via `template_id` UUID
+- **Draft Workflow**: Users can edit templates (creating drafts), navigate away, return to continue editing, discard changes, or publish when ready
+- **Auto-versioning**: Published templates auto-increment version numbers (v1 → v2 → v3)
+- **Backward Compatibility**: Legacy UUID-based APIs still work via conversion helpers
+
+**Key Files Modified:**
+- `crates/papermake-registry/src/storage/sqlite_storage.rs` - Database schema and draft methods
+- `crates/papermake-registry/src/entities.rs` - Entity model restructuring
+- `crates/papermake-registry/src/storage/mod.rs` - Storage trait extensions
+- `crates/papermake-registry/src/registry.rs` - Registry interface implementation
+- `crates/papermake-server/src/routes/templates.rs` - Draft API endpoints
+- `crates/papermake-server/src/models/` - API model updates for String versions
+
+**Current State**: Backend foundation complete, server compiles successfully with draft endpoints functional. Ready for frontend integration or additional backend route updates.
+
+# User Thoughts
+I am thinking about the function of Template in the core library and the VersionedTemplate inside registry.
+- Template in crates/papermake/src/template probably doesn't need template_id and name, because this is handled by the registry

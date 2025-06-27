@@ -1,6 +1,6 @@
 //! Render-related API models
 
-use papermake_registry::{entities::RenderJob, TemplateId};
+use papermake_registry::{TemplateId, entities::RenderJob};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -8,8 +8,8 @@ use time::OffsetDateTime;
 #[derive(Debug, Serialize)]
 pub struct RenderJobSummary {
     pub id: String,
-    pub template_id: TemplateId,
-    pub template_version: String,
+    pub template_name: String,
+    pub template_tag: String,
     pub status: RenderStatus,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -35,13 +35,15 @@ impl From<RenderJob> for RenderJobSummary {
 
         Self {
             id: job.id,
-            template_id: job.template_id,
-            template_version: job.template_version,
+            template_name: job.template_name,
+            template_tag: job.template_tag,
             status,
             created_at: job.created_at,
             completed_at: job.completed_at,
             rendering_latency: job.rendering_latency.map(|l| l as i64),
-            pdf_url: job.pdf_s3_key.map(|_key| format!("/api/renders/{}/pdf", job_id)),
+            pdf_url: job
+                .pdf_s3_key
+                .map(|_key| format!("/api/renders/{}/pdf", job_id)),
         }
     }
 }
@@ -50,8 +52,8 @@ impl From<RenderJob> for RenderJobSummary {
 #[derive(Debug, Serialize)]
 pub struct RenderJobDetails {
     pub id: String,
-    pub template_id: TemplateId,
-    pub template_version: String,
+    pub template_name: String,
+    pub template_tag: String,
     pub data: serde_json::Value,
     pub data_hash: String,
     pub status: RenderStatus,
@@ -78,7 +80,7 @@ pub enum RenderStatus {
 #[derive(Debug, Deserialize)]
 pub struct CreateRenderRequest {
     pub template_id: TemplateId,
-    pub template_version: String,
+    pub template_tag: String,
     pub data: serde_json::Value,
     pub options: Option<RenderOptions>,
 }
@@ -88,10 +90,10 @@ pub struct CreateRenderRequest {
 pub struct RenderOptions {
     /// Paper size (e.g., "a4", "letter")
     pub paper_size: Option<String>,
-    
+
     /// Whether to compress the output PDF
     pub compress: Option<bool>,
-    
+
     /// Priority level (higher = more priority)
     pub priority: Option<i32>,
 }
@@ -126,16 +128,16 @@ pub struct BatchRenderResponse {
 pub struct RenderJobQuery {
     #[serde(flatten)]
     pub pagination: super::PaginationQuery,
-    
+
     /// Filter by template ID
     pub template_id: Option<TemplateId>,
-    
+
     /// Filter by status
     pub status: Option<RenderStatus>,
-    
+
     /// Filter by date range (start)
     pub date_from: Option<OffsetDateTime>,
-    
+
     /// Filter by date range (end)
     pub date_to: Option<OffsetDateTime>,
 }
