@@ -19,14 +19,6 @@ use papermake_registry::TemplateRegistry;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
-/// Helper function to parse version string to u64 for legacy compatibility
-fn parse_version_to_u64(version: &str) -> u64 {
-    if let Some(v) = version.strip_prefix('v') {
-        v.parse().unwrap_or(1)
-    } else {
-        version.parse().unwrap_or(1)
-    }
-}
 
 /// Create render routes
 pub fn router() -> Router<AppState> {
@@ -54,9 +46,9 @@ async fn list_renders(
     let filtered_jobs: Vec<_> = jobs
         .into_iter()
         .filter(|job| {
-            // Filter by template_id if specified
-            if let Some(ref template_id) = query.template_id {
-                if &job.template_id != template_id {
+            // Filter by template_ref if specified
+            if let Some(ref template_ref) = query.template_ref {
+                if job.template_ref.to_string() != *template_ref {
                     return false;
                 }
             }
@@ -76,14 +68,11 @@ async fn list_renders(
 
             // Filter by status if specified
             if let Some(ref status) = query.status {
-                let job_status = if job.completed_at.is_some() {
-                    if job.pdf_s3_key.is_some() {
-                        RenderStatus::Completed
-                    } else {
-                        RenderStatus::Failed
-                    }
-                } else {
-                    RenderStatus::Processing
+                let job_status = match job.status {
+                    papermake_registry::entities::RenderStatus::Pending => RenderStatus::Queued,
+                    papermake_registry::entities::RenderStatus::InProgress => RenderStatus::Processing,
+                    papermake_registry::entities::RenderStatus::Completed => RenderStatus::Completed,
+                    papermake_registry::entities::RenderStatus::Failed => RenderStatus::Failed,
                 };
 
                 if std::mem::discriminant(&job_status) != std::mem::discriminant(status) {
@@ -123,14 +112,14 @@ async fn create_render(
     Json(request): Json<CreateRenderRequest>,
 ) -> Result<impl IntoResponse> {
     info!(
-        "Creating render job for template {:?} v{}",
-        request.template_id, request.template_tag
+        "Creating render job for template {}",
+        request.template_ref
     );
 
     // Create render job through registry
     let render_job = state
         .registry
-        .render_template(&request.template_id, parse_version_to_u64(&request.template_tag), &request.data)
+        .render_template(&request.template_ref, &request.data)
         .await?;
 
     // Send job to worker for immediate processing
@@ -158,20 +147,16 @@ async fn get_render(
 
     let job = state.registry.get_render_job(&render_id).await?;
 
-    let status = if job.completed_at.is_some() {
-        if job.pdf_s3_key.is_some() {
-            RenderStatus::Completed
-        } else {
-            RenderStatus::Failed
-        }
-    } else {
-        RenderStatus::Processing
+    let status = match job.status {
+        papermake_registry::entities::RenderStatus::Pending => RenderStatus::Queued,
+        papermake_registry::entities::RenderStatus::InProgress => RenderStatus::Processing,
+        papermake_registry::entities::RenderStatus::Completed => RenderStatus::Completed,
+        papermake_registry::entities::RenderStatus::Failed => RenderStatus::Failed,
     };
 
     let details = RenderJobDetails {
         id: job.id.clone(),
-        template_id: job.template_id,
-        template_tag: job.template_tag,
+        template_ref: job.template_ref.to_string(),
         data: job.data,
         data_hash: job.data_hash,
         status,
@@ -179,7 +164,7 @@ async fn get_render(
         completed_at: job.completed_at,
         rendering_latency: job.rendering_latency.map(|l| l as i64),
         pdf_url: job.pdf_s3_key.as_ref().map(|_| format!("/api/renders/{}/pdf", job.id)),
-        error_message: None, // Could be stored in the future
+        error_message: job.error_message,
     };
 
     Ok(Json(ApiResponse::new(details)))
@@ -241,7 +226,7 @@ async fn retry_render(
     // Create a new render job with the same parameters
     let new_job = state
         .registry
-        .render_template(&job.template_id, parse_version_to_u64(&job.template_tag), &job.data)
+        .render_template(&job.template_ref.to_string(), &job.data)
         .await?;
 
     // Send job to worker for immediate processing
@@ -282,7 +267,7 @@ async fn create_batch_render(
     for req in request.requests {
         match state
             .registry
-            .render_template(&req.template_id, parse_version_to_u64(&req.template_tag), &req.data)
+            .render_template(&req.template_ref, &req.data)
             .await
         {
             Ok(job) => {

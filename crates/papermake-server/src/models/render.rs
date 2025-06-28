@@ -1,6 +1,6 @@
 //! Render-related API models
 
-use papermake_registry::{TemplateId, entities::RenderJob};
+use papermake_registry::entities::RenderJob;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -8,8 +8,7 @@ use time::OffsetDateTime;
 #[derive(Debug, Serialize)]
 pub struct RenderJobSummary {
     pub id: String,
-    pub template_name: String,
-    pub template_tag: String,
+    pub template_ref: String,
     pub status: RenderStatus,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -21,22 +20,18 @@ pub struct RenderJobSummary {
 
 impl From<RenderJob> for RenderJobSummary {
     fn from(job: RenderJob) -> Self {
-        let status = if job.completed_at.is_some() {
-            if job.pdf_s3_key.is_some() {
-                RenderStatus::Completed
-            } else {
-                RenderStatus::Failed
-            }
-        } else {
-            RenderStatus::Processing
+        let status = match job.status {
+            papermake_registry::entities::RenderStatus::Pending => RenderStatus::Queued,
+            papermake_registry::entities::RenderStatus::InProgress => RenderStatus::Processing,
+            papermake_registry::entities::RenderStatus::Completed => RenderStatus::Completed,
+            papermake_registry::entities::RenderStatus::Failed => RenderStatus::Failed,
         };
 
         let job_id = job.id.clone();
 
         Self {
             id: job.id,
-            template_name: job.template_name,
-            template_tag: job.template_tag,
+            template_ref: job.template_ref.to_string(),
             status,
             created_at: job.created_at,
             completed_at: job.completed_at,
@@ -52,8 +47,7 @@ impl From<RenderJob> for RenderJobSummary {
 #[derive(Debug, Serialize)]
 pub struct RenderJobDetails {
     pub id: String,
-    pub template_name: String,
-    pub template_tag: String,
+    pub template_ref: String,
     pub data: serde_json::Value,
     pub data_hash: String,
     pub status: RenderStatus,
@@ -79,8 +73,7 @@ pub enum RenderStatus {
 /// Request to create a render job
 #[derive(Debug, Deserialize)]
 pub struct CreateRenderRequest {
-    pub template_id: TemplateId,
-    pub template_tag: String,
+    pub template_ref: String,
     pub data: serde_json::Value,
     pub options: Option<RenderOptions>,
 }
@@ -129,8 +122,8 @@ pub struct RenderJobQuery {
     #[serde(flatten)]
     pub pagination: super::PaginationQuery,
 
-    /// Filter by template ID
-    pub template_id: Option<TemplateId>,
+    /// Filter by template reference
+    pub template_ref: Option<String>,
 
     /// Filter by status
     pub status: Option<RenderStatus>,

@@ -15,7 +15,7 @@ use axum::{
     response::Json,
     routing::get,
 };
-use papermake_registry::{TemplateId, TemplateRegistry};
+use papermake_registry::TemplateRegistry;
 use time::OffsetDateTime;
 use tracing::debug;
 
@@ -97,16 +97,16 @@ async fn get_dashboard_metrics(
     // Get popular templates (simplified - count by template_id in last 24h)
     let mut template_usage_map = std::collections::HashMap::new();
     for job in &jobs_24h {
-        let key = (&job.template_id, job.template_tag.clone());
+        let key = job.template_ref.to_string();
         *template_usage_map.entry(key).or_insert(0) += 1;
     }
 
     let popular_templates: Vec<TemplateUsage> = template_usage_map
         .into_iter()
-        .map(|((template_id, version), count)| TemplateUsage {
-            template_id: template_id.clone(),
-            template_name: template_id.to_string(), // Would get actual name from registry
-            version,
+        .map(|(template_ref, count)| TemplateUsage {
+            template_ref: template_ref.clone(),
+            template_name: template_ref.clone(), // Would get actual name from registry
+            version: "latest".to_string(),
             uses_24h: count,
             uses_7d: count,    // Simplified
             uses_30d: count,   // Simplified
@@ -125,13 +125,14 @@ async fn get_dashboard_metrics(
     let new_templates: Vec<TemplateSummary> = sorted_templates
         .into_iter()
         .take(5)
-        .map(|vt| TemplateSummary {
-            id: vt.template.id,
-            name: vt.template.name,
-            latest_version: vt.tag,
+        .map(|te| TemplateSummary {
+            template_ref: te.template_ref.to_string(),
+            name: te.template_ref.name.clone(),
+            tag: te.template_ref.tag.clone(),
+            org: te.template_ref.org.clone(),
             uses_24h: 0, // Would calculate from jobs
-            published_at: vt.published_at,
-            author: vt.author,
+            published_at: te.published_at,
+            author: te.author,
         })
         .collect();
 
@@ -172,8 +173,8 @@ async fn get_template_usage(
                     return false;
                 }
             }
-            if let Some(ref template_id) = query.template_id {
-                if &job.template_id != template_id {
+            if let Some(ref template_ref) = query.template_ref {
+                if job.template_ref.to_string() != *template_ref {
                     return false;
                 }
             }
@@ -184,7 +185,7 @@ async fn get_template_usage(
     // Group by template and calculate usage
     let mut usage_map = std::collections::HashMap::new();
     for job in filtered_jobs {
-        let key = (&job.template_id, job.template_tag.clone());
+        let key = job.template_ref.to_string();
         let entry = usage_map.entry(key).or_insert_with(|| {
             (0i64, Vec::new()) // (count, latencies)
         });
@@ -196,7 +197,7 @@ async fn get_template_usage(
 
     let mut usage_stats: Vec<TemplateUsage> = usage_map
         .into_iter()
-        .map(|((template_id, version), (count, latencies))| {
+        .map(|(template_ref, (count, latencies))| {
             let avg_render_time_ms = if !latencies.is_empty() {
                 Some(
                     latencies.iter().map(|&l| l as u64).sum::<u64>() as f64
@@ -207,9 +208,9 @@ async fn get_template_usage(
             };
 
             TemplateUsage {
-                template_id: template_id.clone(),
-                template_name: template_id.to_string(), // Would get from registry
-                version,
+                template_ref: template_ref.clone(),
+                template_name: template_ref.clone(), // Would get from registry
+                version: "latest".to_string(),
                 uses_24h: count, // Simplified - would calculate per period
                 uses_7d: count,
                 uses_30d: count,
@@ -239,22 +240,22 @@ async fn get_template_analytics(
 ) -> Result<Json<ApiResponse<TemplateAnalytics>>> {
     debug!("Getting analytics for template: {}", template_name);
 
-    // Get template versions
-    let versions = state.registry.list_versions(&template_name).await?;
-    let latest_version = versions.iter().max().copied().unwrap_or(1);
+    // Get template tags
+    let tags = state.registry.list_tags(&template_name).await?;
+    let latest_version = tags.iter().find(|t| t.starts_with('v')).cloned().unwrap_or_else(|| "v1".to_string());
 
     // Get render jobs for this template
     let all_jobs = state.registry.list_render_jobs().await?;
     let template_jobs: Vec<_> = all_jobs
         .iter()
-        .filter(|job| job.template_name == template_name)
+        .filter(|job| job.template_ref.name == template_name)
         .collect();
 
     // Calculate performance metrics
     let total_renders = template_jobs.len() as i64;
     let successful_renders = template_jobs
         .iter()
-        .filter(|job| job.completed_at.is_some() && job.pdf_s3_key.is_some())
+        .filter(|job| matches!(job.status, papermake_registry::entities::RenderStatus::Completed))
         .count() as i64;
     let failed_renders = total_renders - successful_renders;
 
@@ -303,10 +304,10 @@ async fn get_template_analytics(
     let usage_over_time = vec![]; // Would implement time-series grouping
 
     let analytics = TemplateAnalytics {
-        template_id: template_id.clone(),
-        template_name: template_id.to_string(), // Would get from registry
-        total_versions: versions.len() as u64,
-        latest_version: format!("v{}", latest_version),
+        template_ref: format!("{}:{}", template_name, latest_version),
+        template_name: template_name.clone(),
+        total_versions: tags.len() as u64,
+        latest_version,
         usage_over_time,
         performance_metrics,
     };

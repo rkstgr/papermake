@@ -62,20 +62,20 @@ impl RenderWorker {
 
         // Get the template for this job
         info!(
-            "Processing render job {} for template {}:{}",
-            job.id, job.template_name, job.template_tag
+            "Processing render job {} for template {}",
+            job.id, job.template_ref
         );
         let template = match self
             .state
             .registry
-            .get_template(&job.template_name, &job.template_tag)
+            .get_template(&job.template_ref.to_string())
             .await
         {
-            Ok(versioned_template) => versioned_template.template,
+            Ok(template_entry) => template_entry.template,
             Err(e) => {
                 let error_msg = format!(
-                    "Failed to get template {}:{} {}",
-                    job.template_name, job.template_tag, e
+                    "Failed to get template {} {}",
+                    job.template_ref, e
                 );
                 error!("Render job {} failed: {}", job.id, error_msg);
                 job.fail(error_msg);
@@ -101,8 +101,8 @@ impl RenderWorker {
                 );
                 // Generate S3 key for the PDF
                 let s3_key = format!(
-                    "renders/{}:{}/{}.pdf",
-                    job.template_name, job.template_tag, job.id
+                    "renders/{}/{}.pdf",
+                    job.template_ref, job.id
                 );
 
                 // Store PDF in file storage

@@ -1,7 +1,6 @@
 //! Analytics and dashboard API models
 
 use super::{RenderJobSummary, TemplateSummary};
-use papermake_registry::TemplateId;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -33,7 +32,7 @@ pub struct DashboardMetrics {
 /// Template usage statistics
 #[derive(Debug, Serialize)]
 pub struct TemplateUsage {
-    pub template_id: TemplateId,
+    pub template_ref: String,
     pub template_name: String,
     pub version: String,
     pub uses_24h: i64,
@@ -103,8 +102,8 @@ pub struct AnalyticsQuery {
     /// End date for analysis
     pub date_to: Option<OffsetDateTime>,
 
-    /// Filter by specific template ID
-    pub template_id: Option<TemplateId>,
+    /// Filter by specific template reference
+    pub template_ref: Option<String>,
 
     /// Limit number of results
     pub limit: Option<u32>,
@@ -113,7 +112,7 @@ pub struct AnalyticsQuery {
 /// Template analytics details
 #[derive(Debug, Serialize)]
 pub struct TemplateAnalytics {
-    pub template_id: TemplateId,
+    pub template_ref: String,
     pub template_name: String,
     pub total_versions: u64,
     pub latest_version: String,

@@ -1,54 +1,49 @@
 //! Template management routes
 
 use crate::{
+    AppState,
     error::{ApiError, Result},
     models::{
-        ApiResponse, PaginatedResponse, TemplateDetails, TemplateSummary, CreateTemplateRequest,
-        TemplatePreviewRequest, TemplateValidationRequest,
-        TemplateValidationResponse, SearchQuery,
+        ApiResponse, CreateTemplateRequest, PaginatedResponse, SearchQuery, TemplateDetails,
+        TemplatePreviewRequest, TemplateSummary, TemplateValidationRequest,
+        TemplateValidationResponse,
     },
-    AppState,
 };
 use axum::{
+    Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
-    Json, Router,
 };
 use papermake::TemplateBuilder;
-use papermake_registry::{TemplateId, TemplateRegistry};
+use papermake_registry::{TemplateRegistry, template_ref::TemplateRef};
 use tracing::{debug, error, info};
 
-/// Helper function to parse name:tag format (e.g., "invoice-template:v2")
-fn parse_name_tag(name_tag: &str) -> Result<(String, String)> {
-    if let Some(colon_pos) = name_tag.find(':') {
-        let name = name_tag[..colon_pos].to_string();
-        let tag = name_tag[colon_pos + 1..].to_string();
-        Ok((name, tag))
-    } else {
-        Err(ApiError::validation("Invalid name:tag format. Expected format: 'template-name:tag'"))
-    }
+/// Helper function to parse TemplateRef from string
+fn parse_template_ref(ref_str: &str) -> Result<TemplateRef> {
+    ref_str
+        .parse()
+        .map_err(|e| ApiError::validation(&format!("Invalid template reference format: {}", e)))
 }
 
 /// Create template routes
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_templates).post(create_template))
-        // Legacy UUID-based routes (with /by-id/ prefix for clarity)
-        .route("/by-id/{template_id}", get(get_template_by_id))
-        .route("/by-id/{template_id}/versions", get(list_template_versions_by_id))
-        .route("/by-id/{template_id}/versions/{version}", get(get_template_version_by_id))
-        // Special endpoints that need to come before catch-all template name routes
+        // Special endpoints that need to come before catch-all template routes
         .route("/preview", post(preview_template))
         .route("/validate", post(validate_template))
-        // New name-based routes (catch template names that might contain colons)
-        .route("/{name_tag_param}", get(get_template_by_name_or_name_tag))
-        .route("/{template_name}/tags", get(list_template_tags_by_name))
-        .route("/{template_name}/tags/{tag}", get(get_template_tag_by_name))
+        // Docker-style template reference routes (supports org/name:tag[@digest])
+        .route("/{*template_ref}", get(get_template_by_ref))
+        // Template management by name
+        .route("/{*template_name}/tags", get(list_template_tags_by_name))
         // Draft endpoints (by template name)
-        .route("/{template_name}/draft", get(get_draft).put(save_draft).delete(delete_draft))
-        .route("/{template_name}/draft/publish", post(publish_draft))
+        .route(
+            "/{*template_name}/draft",
+            get(get_draft).put(save_draft).delete(delete_draft),
+        )
+        .route("/{*template_name}/draft/publish", post(publish_draft))
 }
 
 /// List all templates with pagination and search
@@ -60,19 +55,24 @@ async fn list_templates(
 
     // For now, get all templates and apply basic filtering
     // In production, this should be done at the database level
-    let templates = state.registry.list_templates().await
-        .map_err(|e| {
-            error!("Failed to list templates: {}", e);
-            e
-        })?;
-    
+    let templates = state.registry.list_templates().await.map_err(|e| {
+        error!("Failed to list templates: {}", e);
+        e
+    })?;
+
     // Apply search filter if provided
     let filtered_templates: Vec<_> = if let Some(search_term) = &query.search {
         templates
             .into_iter()
             .filter(|t| {
-                t.template.name.to_lowercase().contains(&search_term.to_lowercase())
-                    || t.template.id.to_string().to_lowercase().contains(&search_term.to_lowercase())
+                t.template_ref
+                    .name
+                    .to_lowercase()
+                    .contains(&search_term.to_lowercase())
+                    || t.template_ref
+                        .to_string()
+                        .to_lowercase()
+                        .contains(&search_term.to_lowercase())
             })
             .collect()
     } else {
@@ -89,13 +89,14 @@ async fn list_templates(
     // Note: In production, we'd get usage stats from analytics
     let summaries: Vec<TemplateSummary> = page_templates
         .into_iter()
-        .map(|vt| TemplateSummary {
-            id: vt.template.id,
-            name: vt.template.name,
-            latest_version: vt.tag,
+        .map(|te| TemplateSummary {
+            template_ref: te.template_ref.to_string(),
+            name: te.template_ref.name.clone(),
+            tag: te.template_ref.tag.clone(),
+            org: te.template_ref.org.clone(),
             uses_24h: 0, // TODO: Get from analytics
-            published_at: vt.published_at,
-            author: vt.author,
+            published_at: te.published_at,
+            author: te.author,
         })
         .collect();
 
@@ -109,38 +110,21 @@ async fn list_templates(
     Ok(Json(response))
 }
 
-/// Get a specific template by UUID (latest version) - Legacy endpoint
-async fn get_template_by_id(
+/// Get a template by Docker-style reference (org/name:tag[@digest])
+async fn get_template_by_ref(
     State(state): State<AppState>,
-    Path(template_id): Path<TemplateId>,
+    Path(template_ref_str): Path<String>,
 ) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template by ID: {:?}", template_id);
+    debug!("Getting template by reference: {}", template_ref_str);
 
-    let template = state.registry.get_latest_template(&template_id).await?;
+    // URL decode the template reference
+    let decoded_ref = urlencoding::decode(&template_ref_str)
+        .map_err(|_| ApiError::validation("Invalid URL encoding in template reference"))?;
+
+    let template = state.registry.get_template(&decoded_ref).await?;
     let details = TemplateDetails::from(template);
 
     Ok(Json(ApiResponse::new(details)))
-}
-
-/// Get a template by name or name:tag format
-async fn get_template_by_name_or_name_tag(
-    State(state): State<AppState>,
-    Path(name_tag_param): Path<String>,
-) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template by name or name:tag: {}", name_tag_param);
-
-    // Check if this is a name:tag format
-    if name_tag_param.contains(':') {
-        let (template_name, tag) = parse_name_tag(&name_tag_param)?;
-        let template = state.registry.get_template_by_name(&template_name, &tag).await?;
-        let details = TemplateDetails::from(template);
-        Ok(Json(ApiResponse::new(details)))
-    } else {
-        // Treat as template name, get latest tag
-        let template = state.registry.get_latest_template_by_name(&name_tag_param).await?;
-        let details = TemplateDetails::from(template);
-        Ok(Json(ApiResponse::new(details)))
-    }
 }
 
 /// Create a new template
@@ -148,38 +132,30 @@ async fn create_template(
     State(state): State<AppState>,
     Json(request): Json<CreateTemplateRequest>,
 ) -> Result<impl IntoResponse> {
-    info!("Creating new template: {:?}", request.id);
+    info!("Creating new template: {}", request.template_ref);
+
+    // Parse template reference
+    let template_ref = parse_template_ref(&request.template_ref)?;
 
     // Build template using papermake's builder
-    let template = TemplateBuilder::new(request.id.clone())
-        .name(request.name)
+    let template = TemplateBuilder::new()
         .description(request.description.unwrap_or_default())
         .content(request.content)
-        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
+        .schema(papermake::Schema::from_value(
+            request.schema.unwrap_or(serde_json::Value::Null),
+        ))
         .build()
         .map_err(|e| ApiError::validation(&e.to_string()))?;
 
     // Publish template to registry
-    let versioned_template = state
+    let template_entry = state
         .registry
-        .publish_template(template, request.author)
+        .publish_template(template, template_ref, request.author)
         .await?;
 
-    let details = TemplateDetails::from(versioned_template);
+    let details = TemplateDetails::from(template_entry);
 
     Ok((StatusCode::CREATED, Json(ApiResponse::new(details))))
-}
-
-/// List all versions of a template by UUID - Legacy endpoint
-async fn list_template_versions_by_id(
-    State(state): State<AppState>,
-    Path(template_id): Path<TemplateId>,
-) -> Result<Json<ApiResponse<Vec<u64>>>> {
-    debug!("Listing versions for template ID: {:?}", template_id);
-
-    let versions = state.registry.list_versions(&template_id).await?;
-
-    Ok(Json(ApiResponse::new(versions)))
 }
 
 /// List all tags of a template by name
@@ -189,37 +165,10 @@ async fn list_template_tags_by_name(
 ) -> Result<Json<ApiResponse<Vec<String>>>> {
     debug!("Listing tags for template: {}", template_name);
 
-    let tags = state.registry.list_tags_by_name(&template_name).await?;
+    let tags = state.registry.list_tags(&template_name).await?;
 
     Ok(Json(ApiResponse::new(tags)))
 }
-
-/// Get a specific version of a template by UUID - Legacy endpoint
-async fn get_template_version_by_id(
-    State(state): State<AppState>,
-    Path((template_id, version)): Path<(TemplateId, u64)>,
-) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template {:?} version {}", template_id, version);
-
-    let template = state.registry.get_template(&template_id, version).await?;
-    let details = TemplateDetails::from(template);
-
-    Ok(Json(ApiResponse::new(details)))
-}
-
-/// Get a specific tag of a template by name
-async fn get_template_tag_by_name(
-    State(state): State<AppState>,
-    Path((template_name, tag)): Path<(String, String)>,
-) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template {} tag {}", template_name, tag);
-
-    let template = state.registry.get_template_by_name(&template_name, &tag).await?;
-    let details = TemplateDetails::from(template);
-
-    Ok(Json(ApiResponse::new(details)))
-}
-
 
 /// Preview a template without storing it
 async fn preview_template(
@@ -229,10 +178,11 @@ async fn preview_template(
     debug!("Previewing template");
 
     // Create temporary template
-    let template = TemplateBuilder::new("preview".into())
-        .name("Preview")
+    let template = TemplateBuilder::new()
         .content(request.content)
-        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
+        .schema(papermake::Schema::from_value(
+            request.schema.unwrap_or(serde_json::Value::Null),
+        ))
         .build()
         .map_err(|e| ApiError::validation(&e.to_string()))?;
 
@@ -263,9 +213,7 @@ async fn validate_template(
     debug!("Validating template");
 
     // Try to build the template to validate syntax
-    let mut builder = TemplateBuilder::new("validation".into())
-        .name("Validation")
-        .content(request.content);
+    let mut builder = TemplateBuilder::new().content(request.content);
 
     if let Some(schema) = request.schema {
         builder = builder.schema(papermake::Schema::from_value(schema));
@@ -277,7 +225,7 @@ async fn validate_template(
         Ok(template) => {
             // If data is provided, try to validate against schema
             let mut errors = Vec::new();
-            
+
             if let Some(data) = request.data {
                 if let Err(e) = template.validate_data(&data) {
                     errors.push(crate::models::ValidationError {
@@ -321,7 +269,7 @@ async fn get_draft(
 ) -> Result<Json<ApiResponse<Option<TemplateDetails>>>> {
     debug!("Getting draft for template: {}", template_name);
 
-    let draft = state.registry.get_draft(&template_name).await?;
+    let draft = state.registry.get_draft_template(&template_name).await?;
     let details = draft.map(TemplateDetails::from);
 
     Ok(Json(ApiResponse::new(details)))
@@ -336,18 +284,19 @@ async fn save_draft(
     info!("Saving draft for template: {}", template_name);
 
     // Build template using papermake's builder
-    let template = TemplateBuilder::new(request.id.clone())
-        .name(request.name.clone())
+    let template = TemplateBuilder::new()
         .description(request.description.unwrap_or_default())
         .content(request.content)
-        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
+        .schema(papermake::Schema::from_value(
+            request.schema.unwrap_or(serde_json::Value::Null),
+        ))
         .build()
         .map_err(|e| ApiError::validation(&e.to_string()))?;
 
     // Save as draft
     let draft_template = state
         .registry
-        .save_draft(template, template_name, request.name, request.author)
+        .save_draft_template(template, template_name, request.author)
         .await?;
 
     let details = TemplateDetails::from(draft_template);
@@ -362,7 +311,7 @@ async fn delete_draft(
 ) -> Result<impl IntoResponse> {
     info!("Deleting draft for template: {}", template_name);
 
-    state.registry.delete_draft(&template_name).await?;
+    state.registry.delete_draft_template(&template_name).await?;
 
     Ok((StatusCode::NO_CONTENT, ()))
 }

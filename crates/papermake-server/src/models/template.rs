@@ -1,15 +1,16 @@
 //! Template-related API models
 
-use papermake_registry::{TemplateId, entities::VersionedTemplate};
+use papermake_registry::entities::TemplateEntry;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 /// Template summary for listing endpoints
 #[derive(Debug, Serialize)]
 pub struct TemplateSummary {
-    pub id: TemplateId,
+    pub template_ref: String,
     pub name: String,
-    pub latest_version: String,
+    pub tag: String,
+    pub org: Option<String>,
     pub uses_24h: u64,
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
@@ -19,12 +20,14 @@ pub struct TemplateSummary {
 /// Full template details
 #[derive(Debug, Serialize)]
 pub struct TemplateDetails {
-    pub id: TemplateId,
+    pub template_ref: String,
     pub name: String,
+    pub tag: String,
+    pub org: Option<String>,
+    pub digest: Option<String>,
     pub description: Option<String>,
     pub content: String,
     pub schema: Option<serde_json::Value>,
-    pub tag: String,
     pub author: String,
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
@@ -32,24 +35,26 @@ pub struct TemplateDetails {
     pub uses_24h: u64,
 }
 
-impl From<VersionedTemplate> for TemplateDetails {
-    fn from(vt: VersionedTemplate) -> Self {
+impl From<TemplateEntry> for TemplateDetails {
+    fn from(te: TemplateEntry) -> Self {
         // Convert papermake Schema to JSON Value
-        let schema = match serde_json::to_value(&vt.template.schema) {
+        let schema = match serde_json::to_value(&te.template.schema) {
             Ok(serde_json::Value::Null) => None,
             Ok(value) => Some(value),
             Err(_) => None,
         };
 
         Self {
-            id: vt.template.id,
-            name: vt.template.name,
-            description: vt.template.description,
-            content: vt.template.content,
+            template_ref: te.template_ref.to_string(),
+            name: te.template_ref.name.clone(),
+            tag: te.template_ref.tag.clone(),
+            org: te.template_ref.org.clone(),
+            digest: te.template_ref.digest.clone(),
+            description: te.template.description,
+            content: te.template.content,
             schema,
-            tag: vt.tag,
-            author: vt.author,
-            published_at: vt.published_at,
+            author: te.author,
+            published_at: te.published_at,
             uses_total: 0, // Will be populated by analytics
             uses_24h: 0,   // Will be populated by analytics
         }
@@ -69,8 +74,7 @@ pub struct TemplateVersion {
 /// Request to create a new template
 #[derive(Debug, Deserialize)]
 pub struct CreateTemplateRequest {
-    pub id: TemplateId,
-    pub name: String,
+    pub template_ref: String,
     pub description: Option<String>,
     pub content: String,
     pub schema: Option<serde_json::Value>,
