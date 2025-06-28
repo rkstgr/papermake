@@ -1,5 +1,6 @@
 //! Storage abstraction for registry data
 
+use crate::TemplateRef;
 use crate::{entities::*, error::Result};
 use async_trait::async_trait;
 // Re-export for convenience
@@ -9,22 +10,12 @@ pub use papermake::FileError;
 #[cfg(feature = "sqlite")]
 pub mod sqlite_storage;
 
-// TiKV implementation
-#[cfg(feature = "tikv")]
-pub mod tikv_storage;
-
-// S3 implementation  
+// S3 implementation
 #[cfg(feature = "s3")]
 pub mod s3_storage;
 
 // Registry file system for Typst integration
 pub mod registry_filesystem;
-
-// Legacy implementations (will be removed)
-#[cfg(feature = "fs")]
-pub mod file_storage;
-#[cfg(feature = "postgres")]
-pub mod postgres;
 
 /// Metadata storage trait for template and render job data
 #[async_trait]
@@ -35,15 +26,15 @@ pub trait MetadataStorage: Send + Sync {
     async fn save_template(&self, template: &TemplateEntry) -> Result<()>;
 
     /// Get a template entry by Docker-style reference (org/name:tag[@digest])
-    async fn get_template(&self, template_ref: &str) -> Result<TemplateEntry>;
+    async fn get_template(&self, template_ref: &TemplateRef) -> Result<TemplateEntry>;
 
     /// Delete a template entry by reference
-    async fn delete_template(&self, template_ref: &str) -> Result<()>;
+    async fn delete_template(&self, template_ref: &TemplateRef) -> Result<()>;
 
     /// List all tags for a template by name
     async fn list_template_tags(&self, name: &str) -> Result<Vec<String>>;
 
-    /// Search templates by name/description  
+    /// Search templates by name/description
     async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>>;
 
     /// Get the next version number for auto-incrementing (e.g., 3 after v2)
@@ -103,5 +94,3 @@ pub trait TypstFileSystem: Send + Sync {
     /// Get file content by path
     async fn get_file(&self, path: &str) -> std::result::Result<Vec<u8>, papermake::FileError>;
 }
-
-// Legacy trait removed - no backward compatibility needed

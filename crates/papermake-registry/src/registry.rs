@@ -15,20 +15,16 @@ use std::sync::Arc;
 #[async_trait]
 pub trait TemplateRegistry {
     /// Get a template by Docker-style reference (org/name:tag[@digest])
-    async fn get_template(&self, template_ref: &str) -> Result<TemplateEntry>;
+    async fn get_template(&self, template_ref: &TemplateRef) -> Result<TemplateEntry>;
 
     /// Get a template by name and tag
-    async fn get_template_by_name(
-        &self,
-        name: &str,
-        tag: &str,
-    ) -> Result<TemplateEntry>;
+    async fn get_template_by_name(&self, name: &str, tag: &str) -> Result<TemplateEntry>;
 
     /// List all tags for a template by name
     async fn list_tags(&self, name: &str) -> Result<Vec<String>>;
 
     /// Delete a template by reference
-    async fn delete_template(&self, template_ref: &str) -> Result<()>;
+    async fn delete_template(&self, template_ref: &TemplateRef) -> Result<()>;
 
     /// Search templates by name/description
     async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>>;
@@ -36,15 +32,7 @@ pub trait TemplateRegistry {
     /// Render a template by Docker-style reference
     async fn render_template(
         &self,
-        template_ref: &str,
-        data: &serde_json::Value,
-    ) -> Result<RenderJob>;
-
-    /// Render a template by name and tag
-    async fn render_template_by_name(
-        &self,
-        name: &str,
-        tag: &str,
+        template_ref: &TemplateRef,
         data: &serde_json::Value,
     ) -> Result<RenderJob>;
 
@@ -77,40 +65,6 @@ pub trait TemplateRegistry {
 
     /// Update render job status
     async fn update_render_job(&self, job: &RenderJob) -> Result<()>;
-
-    // === Simplified Draft Management ===
-    // Note: Drafts are just templates with tag: "draft" - no special methods needed!
-    // Use save_draft_template() which calls publish_template() with draft tag
-
-    /// Save a draft template (convenience method)
-    async fn save_draft_template(
-        &self,
-        template: Template,
-        name: String,
-        author: String,
-    ) -> Result<TemplateEntry> {
-        let template_ref = TemplateRef::new(name).with_tag("draft");
-        self.publish_template(template, template_ref, author).await
-    }
-
-    /// Get a draft template by name (convenience method)
-    async fn get_draft_template(&self, name: &str) -> Result<Option<TemplateEntry>> {
-        let template_ref = TemplateRef::new(name).with_tag("draft");
-        match self.get_template(&template_ref.to_string()).await {
-            Ok(template) => Ok(Some(template)),
-            Err(crate::RegistryError::TemplateNotFound(_)) => Ok(None),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Delete a draft template (convenience method)
-    async fn delete_draft_template(&self, name: &str) -> Result<()> {
-        let template_ref = TemplateRef::new(name).with_tag("draft");
-        self.delete_template(&template_ref.to_string()).await
-    }
-
-    /// Publish a draft as a new version (convenience method)
-    async fn publish_draft(&self, name: &str) -> Result<TemplateEntry>;
 }
 
 /// Default implementation of the template registry
@@ -134,33 +88,21 @@ impl DefaultRegistry {
 
 #[async_trait]
 impl TemplateRegistry for DefaultRegistry {
-    async fn get_template(&self, template_ref: &str) -> Result<TemplateEntry> {
-        self.metadata_storage
-            .get_template(template_ref)
-            .await
+    async fn get_template(&self, template_ref: &TemplateRef) -> Result<TemplateEntry> {
+        self.metadata_storage.get_template(template_ref).await
     }
 
-    async fn get_template_by_name(
-        &self,
-        name: &str,
-        tag: &str,
-    ) -> Result<TemplateEntry> {
+    async fn get_template_by_name(&self, name: &str, tag: &str) -> Result<TemplateEntry> {
         let template_ref = TemplateRef::new(name).with_tag(tag);
-        self.metadata_storage
-            .get_template(&template_ref.to_string())
-            .await
+        self.metadata_storage.get_template(&template_ref).await
     }
 
     async fn list_tags(&self, name: &str) -> Result<Vec<String>> {
-        self.metadata_storage
-            .list_template_tags(name)
-            .await
+        self.metadata_storage.list_template_tags(name).await
     }
 
-    async fn delete_template(&self, template_ref: &str) -> Result<()> {
-        self.metadata_storage
-            .delete_template(template_ref)
-            .await
+    async fn delete_template(&self, template_ref: &TemplateRef) -> Result<()> {
+        self.metadata_storage.delete_template(template_ref).await
     }
 
     async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>> {
@@ -169,31 +111,10 @@ impl TemplateRegistry for DefaultRegistry {
 
     async fn render_template(
         &self,
-        template_ref: &str,
+        template_ref: &TemplateRef,
         data: &serde_json::Value,
     ) -> Result<RenderJob> {
-        let template_ref_parsed: TemplateRef = template_ref.parse().map_err(|_| {
-            crate::RegistryError::TemplateNotFound(format!("Invalid template reference: {}", template_ref))
-        })?;
-        
-        let job = RenderJob::new(template_ref_parsed, data.clone());
-
-        // Save the job
-        self.metadata_storage.save_render_job(&job).await?;
-
-        // TODO: Implement actual rendering logic
-        // For now, just return the pending job
-        Ok(job)
-    }
-
-    async fn render_template_by_name(
-        &self,
-        name: &str,
-        tag: &str,
-        data: &serde_json::Value,
-    ) -> Result<RenderJob> {
-        let template_ref = TemplateRef::new(name).with_tag(tag);
-        let job = RenderJob::new(template_ref, data.clone());
+        let job = RenderJob::new(template_ref.clone(), data.clone());
 
         // Save the job
         self.metadata_storage.save_render_job(&job).await?;
@@ -225,9 +146,7 @@ impl TemplateRegistry for DefaultRegistry {
 
     async fn get_latest_template(&self, name: &str) -> Result<TemplateEntry> {
         let template_ref = TemplateRef::new(name).with_tag("latest");
-        self.metadata_storage
-            .get_template(&template_ref.to_string())
-            .await
+        self.metadata_storage.get_template(&template_ref).await
     }
 
     async fn list_templates(&self) -> Result<Vec<TemplateEntry>> {
@@ -248,36 +167,13 @@ impl TemplateRegistry for DefaultRegistry {
         let template_entry = TemplateEntry::new(template, template_ref, author);
 
         // Save to storage
-        self.metadata_storage
-            .save_template(&template_entry)
-            .await?;
+        self.metadata_storage.save_template(&template_entry).await?;
 
         Ok(template_entry)
     }
 
     async fn update_render_job(&self, job: &RenderJob) -> Result<()> {
         self.metadata_storage.save_render_job(job).await
-    }
-
-    async fn publish_draft(&self, name: &str) -> Result<TemplateEntry> {
-        // Get the draft
-        let draft = self.get_draft_template(name).await?
-            .ok_or_else(|| crate::RegistryError::TemplateNotFound(format!("No draft found for template {}", name)))?;
-
-        // Get next version number
-        let next_version = self.metadata_storage.get_next_version_number(name).await?;
-
-        // Create published version from draft
-        let published_ref = TemplateRef::new(name).with_tag(&format!("v{}", next_version));
-        let published_template = TemplateEntry::new(draft.template, published_ref, draft.author);
-
-        // Save the published version
-        self.metadata_storage.save_template(&published_template).await?;
-
-        // Delete the draft
-        self.delete_draft_template(name).await?;
-
-        Ok(published_template)
     }
 }
 

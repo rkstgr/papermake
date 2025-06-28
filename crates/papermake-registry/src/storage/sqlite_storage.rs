@@ -135,15 +135,15 @@ impl MetadataStorage for SqliteStorage {
         Ok(())
     }
 
-    async fn get_template(&self, template_ref: &str) -> Result<TemplateEntry> {
+    async fn get_template(&self, template_ref: &TemplateRef) -> Result<TemplateEntry> {
         let row = sqlx::query(
             r#"
-            SELECT template_ref, org, name, tag, digest, author, published_at, template_data, is_draft, forked_from
+            SELECT template_ref, org, name, tag, digest, author, published_at, template_data, forked_from
             FROM templates
             WHERE template_ref = ?
         "#,
         )
-        .bind(template_ref)
+        .bind(template_ref.to_string())
         .fetch_one(&self.pool)
         .await
         .map_err(|e| match e {
@@ -163,31 +163,27 @@ impl MetadataStorage for SqliteStorage {
         )
         .map_err(|e| RegistryError::Storage(format!("Failed to parse timestamp: {}", e)))?;
 
-        let template_ref_parsed: TemplateRef = template_ref.parse().map_err(|_| {
-            RegistryError::Storage(format!("Invalid template reference: {}", template_ref))
-        })?;
-
         let forked_from = row
             .get::<Option<String>, _>("forked_from")
             .and_then(|s| s.parse().ok());
 
         Ok(TemplateEntry {
             template,
-            template_ref: template_ref_parsed,
+            template_ref: template_ref.clone(),
             author: row.get("author"),
             forked_from,
             published_at,
         })
     }
 
-    async fn delete_template(&self, template_ref: &str) -> Result<()> {
+    async fn delete_template(&self, template_ref: &TemplateRef) -> Result<()> {
         let result = sqlx::query(
             r#"
             DELETE FROM templates
             WHERE template_ref = ?
         "#,
         )
-        .bind(template_ref)
+        .bind(template_ref.to_string())
         .execute(&self.pool)
         .await
         .map_err(|e| RegistryError::Storage(format!("Failed to delete template: {}", e)))?;
@@ -463,42 +459,10 @@ impl MetadataStorage for SqliteStorage {
     }
 
     async fn list_all_templates(&self) -> Result<Vec<TemplateEntry>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT template_ref FROM templates
-            ORDER BY name, tag
-        "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| RegistryError::Storage(format!("Failed to list all templates: {}", e)))?;
-
-        let mut templates = Vec::new();
-        for row in rows {
-            let template_ref: String = row.get("template_ref");
-            templates.push(self.get_template(&template_ref).await?);
-        }
-
-        Ok(templates)
+        todo!("Implement list_all_templates")
     }
 
     async fn list_all_render_jobs(&self) -> Result<Vec<RenderJob>> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id FROM render_jobs
-            ORDER BY created_at DESC
-        "#,
-        )
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| RegistryError::Storage(format!("Failed to list all render jobs: {}", e)))?;
-
-        let mut jobs = Vec::new();
-        for row in rows {
-            let job_id: String = row.get("id");
-            jobs.push(self.get_render_job(&job_id).await?);
-        }
-
-        Ok(jobs)
+        todo!("Implement list_all_render_jobs")
     }
 }
