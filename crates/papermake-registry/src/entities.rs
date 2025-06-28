@@ -1,13 +1,13 @@
 //! Core data structures for the papermake registry
 
-use papermake::Template;
 use crate::template_ref::TemplateRef;
+use papermake::Template;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, hash_map::DefaultHasher};
+use sha2::{Digest, Sha256};
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use time::OffsetDateTime;
 use uuid::Uuid;
-use sha2::{Sha256, Digest};
 
 /// A template entry in the registry with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -27,15 +27,6 @@ pub struct TemplateEntry {
     /// When this version was published
     #[serde(with = "time::serde::rfc3339")]
     pub published_at: OffsetDateTime,
-
-    /// Whether this version is immutable (true once published)
-    pub immutable: bool,
-
-    /// Whether this is a draft (vs published version)
-    pub is_draft: bool,
-
-    /// Schema definition embedded in the template metadata
-    pub schema: Option<HashMap<String, serde_json::Value>>,
 }
 
 impl TemplateEntry {
@@ -47,29 +38,11 @@ impl TemplateEntry {
             author,
             forked_from: None,
             published_at: OffsetDateTime::now_utc(),
-            immutable: true,
-            is_draft: false,
-            schema: None,
         };
-        
+
         // Generate content digest
         entry.generate_digest();
         entry
-    }
-
-    /// Create a new draft template entry
-    pub fn new_draft(template: Template, template_ref: TemplateRef, author: String) -> Self {
-        let draft_ref = template_ref.with_different_tag("draft");
-        Self {
-            template,
-            template_ref: draft_ref,
-            author,
-            forked_from: None,
-            published_at: OffsetDateTime::now_utc(),
-            immutable: false,
-            is_draft: true,
-            schema: None,
-        }
     }
 
     /// Create a forked template entry
@@ -85,11 +58,8 @@ impl TemplateEntry {
             author,
             forked_from: Some(source),
             published_at: OffsetDateTime::now_utc(),
-            immutable: true,
-            is_draft: false,
-            schema: None,
         };
-        
+
         // Generate content digest
         entry.generate_digest();
         entry
@@ -109,43 +79,29 @@ impl TemplateEntry {
     pub fn is_latest(&self) -> bool {
         self.template_ref.is_latest()
     }
-
-    /// Check if this is a draft
-    pub fn is_draft(&self) -> bool {
-        self.is_draft
-    }
-
+    // TODO: how is new_tag derived
     /// Promote draft to published tag
     pub fn publish(mut self, new_tag: String) -> Self {
         self.template_ref = self.template_ref.with_different_tag(new_tag);
-        self.is_draft = false;
-        self.immutable = true;
         self.published_at = OffsetDateTime::now_utc();
-        
+
         // Generate new digest for published version
         self.generate_digest();
-        self
-    }
-
-    /// Add schema definition
-    pub fn with_schema(mut self, schema: HashMap<String, serde_json::Value>) -> Self {
-        self.schema = Some(schema);
         self
     }
 
     /// Generate and set the content digest
     pub fn generate_digest(&mut self) {
         let content = format!(
-            "{}|{}|{:?}",
+            "{}|{}",
             self.template.content,
-            serde_json::to_string(&self.template.schema).unwrap_or_default(),
-            self.schema
+            serde_json::to_string(&self.template.schema).unwrap_or_default(), // TODO: should be more ergonomic
         );
-        
+
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
         let digest = format!("sha256:{:x}", hasher.finalize());
-        
+
         self.template_ref = self.template_ref.with_content_digest(digest);
     }
 }

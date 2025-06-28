@@ -29,8 +29,9 @@ impl SqliteStorage {
 
     /// Create SQLite storage from environment variable
     pub async fn from_env() -> Result<Self> {
-        let database_url = std::env::var("DATABASE_URL")
-            .map_err(|_| RegistryError::Storage("DATABASE_URL environment variable not set".to_string()))?;
+        let database_url = std::env::var("DATABASE_URL").map_err(|_| {
+            RegistryError::Storage("DATABASE_URL environment variable not set".to_string())
+        })?;
         Self::new(&database_url).await
     }
 
@@ -48,16 +49,13 @@ impl SqliteStorage {
                 author TEXT NOT NULL,
                 published_at TEXT NOT NULL,
                 template_data TEXT NOT NULL,         -- JSON of Template struct
-                is_draft INTEGER NOT NULL DEFAULT 0, -- SQLite boolean (0/1)
                 forked_from TEXT                     -- TemplateRef string if forked
             )
         "#,
         )
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            RegistryError::Storage(format!("Failed to create templates table: {}", e))
-        })?;
+        .map_err(|e| RegistryError::Storage(format!("Failed to create templates table: {}", e)))?;
 
         // Create render_jobs table
         sqlx::query(
@@ -112,16 +110,13 @@ impl MetadataStorage for SqliteStorage {
             .format(&time::format_description::well_known::Rfc3339)
             .map_err(|e| RegistryError::Storage(format!("Failed to format timestamp: {}", e)))?;
 
-        let forked_from_str = template
-            .forked_from
-            .as_ref()
-            .map(|f| f.to_string());
+        let forked_from_str = template.forked_from.as_ref().map(|f| f.to_string());
 
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO templates
-            (template_ref, org, name, tag, digest, author, published_at, template_data, is_draft, forked_from)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (template_ref, org, name, tag, digest, author, published_at, template_data, forked_from)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         )
         .bind(template.template_ref.to_string())
@@ -132,7 +127,6 @@ impl MetadataStorage for SqliteStorage {
         .bind(&template.author)
         .bind(published_at)
         .bind(template_json)
-        .bind(if template.is_draft { 1 } else { 0 })
         .bind(forked_from_str)
         .execute(&self.pool)
         .await
@@ -173,7 +167,8 @@ impl MetadataStorage for SqliteStorage {
             RegistryError::Storage(format!("Invalid template reference: {}", template_ref))
         })?;
 
-        let forked_from = row.get::<Option<String>, _>("forked_from")
+        let forked_from = row
+            .get::<Option<String>, _>("forked_from")
             .and_then(|s| s.parse().ok());
 
         Ok(TemplateEntry {
@@ -182,9 +177,6 @@ impl MetadataStorage for SqliteStorage {
             author: row.get("author"),
             forked_from,
             published_at,
-            immutable: !row.get::<i32, _>("is_draft") == 1,
-            is_draft: row.get::<i32, _>("is_draft") == 1,
-            schema: None, // TODO: Store this in database if needed
         })
     }
 
@@ -220,10 +212,7 @@ impl MetadataStorage for SqliteStorage {
         .await
         .map_err(|e| RegistryError::Storage(format!("Failed to list template tags: {}", e)))?;
 
-        let tags: Vec<String> = rows
-            .iter()
-            .map(|row| row.get("tag"))
-            .collect();
+        let tags: Vec<String> = rows.iter().map(|row| row.get("tag")).collect();
 
         Ok(tags)
     }
@@ -232,7 +221,7 @@ impl MetadataStorage for SqliteStorage {
         let search_pattern = format!("%{}%", query);
         let rows = sqlx::query(
             r#"
-            SELECT template_ref, org, name, tag, digest, author, published_at, template_data, is_draft, forked_from
+            SELECT template_ref, org, name, tag, digest, author, published_at, template_data, forked_from
             FROM templates
             WHERE name LIKE ? OR template_ref LIKE ?
             ORDER BY name, tag
@@ -263,7 +252,8 @@ impl MetadataStorage for SqliteStorage {
                 RegistryError::Storage(format!("Invalid template reference: {}", template_ref_str))
             })?;
 
-            let forked_from = row.get::<Option<String>, _>("forked_from")
+            let forked_from = row
+                .get::<Option<String>, _>("forked_from")
                 .and_then(|s| s.parse().ok());
 
             templates.push(TemplateEntry {
@@ -272,9 +262,6 @@ impl MetadataStorage for SqliteStorage {
                 author: row.get("author"),
                 forked_from,
                 published_at,
-                immutable: !row.get::<i32, _>("is_draft") == 1,
-                is_draft: row.get::<i32, _>("is_draft") == 1,
-                schema: None,
             });
         }
 
@@ -308,8 +295,9 @@ impl MetadataStorage for SqliteStorage {
     }
 
     async fn save_render_job(&self, job: &RenderJob) -> Result<()> {
-        let data_json = serde_json::to_string(&job.data)
-            .map_err(|e| RegistryError::Storage(format!("Failed to serialize render job data: {}", e)))?;
+        let data_json = serde_json::to_string(&job.data).map_err(|e| {
+            RegistryError::Storage(format!("Failed to serialize render job data: {}", e))
+        })?;
 
         let status_str = match &job.status {
             RenderStatus::Pending => "pending",
@@ -380,7 +368,12 @@ impl MetadataStorage for SqliteStorage {
             "in_progress" => RenderStatus::InProgress,
             "completed" => RenderStatus::Completed,
             "failed" => RenderStatus::Failed,
-            _ => return Err(RegistryError::Storage(format!("Invalid render status: {}", status_str))),
+            _ => {
+                return Err(RegistryError::Storage(format!(
+                    "Invalid render status: {}",
+                    status_str
+                )));
+            }
         };
 
         let created_at_str: String = row.get("created_at");
@@ -390,7 +383,8 @@ impl MetadataStorage for SqliteStorage {
         )
         .map_err(|e| RegistryError::Storage(format!("Failed to parse timestamp: {}", e)))?;
 
-        let completed_at = row.get::<Option<String>, _>("completed_at")
+        let completed_at = row
+            .get::<Option<String>, _>("completed_at")
             .as_ref()
             .map(|s| time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339))
             .transpose()
@@ -408,14 +402,20 @@ impl MetadataStorage for SqliteStorage {
             data_hash: row.get("data_hash"),
             status,
             pdf_s3_key: row.get("pdf_s3_key"),
-            rendering_latency: row.get::<Option<i64>, _>("rendering_latency").map(|l| l as u64),
+            rendering_latency: row
+                .get::<Option<i64>, _>("rendering_latency")
+                .map(|l| l as u64),
             created_at,
             completed_at,
             error_message: row.get("error_message"),
         })
     }
 
-    async fn find_cached_render(&self, template_ref: &str, data_hash: &str) -> Result<Option<RenderJob>> {
+    async fn find_cached_render(
+        &self,
+        template_ref: &str,
+        data_hash: &str,
+    ) -> Result<Option<RenderJob>> {
         let row = sqlx::query(
             r#"
             SELECT id, template_ref, data, data_hash, status, pdf_s3_key, rendering_latency, created_at, completed_at, error_message
