@@ -48,7 +48,8 @@ impl SqliteStorage {
                 digest TEXT,                         -- Content digest (nullable)
                 author TEXT NOT NULL,
                 published_at TEXT NOT NULL,
-                template_data TEXT NOT NULL,         -- JSON of Template struct
+                content_s3_key TEXT NOT NULL,        -- S3 key for template content (Typst markup)
+                schema_s3_key TEXT NOT NULL,         -- S3 key for template schema (JSON)
                 forked_from TEXT                     -- TemplateRef string if forked
             )
         "#,
@@ -102,9 +103,6 @@ impl SqliteStorage {
 #[async_trait]
 impl MetadataStorage for SqliteStorage {
     async fn save_template(&self, template: &TemplateEntry) -> Result<()> {
-        let template_json = serde_json::to_string(&template.template)
-            .map_err(|e| RegistryError::Storage(format!("Failed to serialize template: {}", e)))?;
-
         let published_at = template
             .published_at
             .format(&time::format_description::well_known::Rfc3339)
@@ -115,8 +113,8 @@ impl MetadataStorage for SqliteStorage {
         sqlx::query(
             r#"
             INSERT OR REPLACE INTO templates
-            (template_ref, org, name, tag, digest, author, published_at, template_data, forked_from)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (template_ref, org, name, tag, digest, author, published_at, content_s3_key, schema_s3_key, forked_from)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         "#,
         )
         .bind(template.template_ref.to_string())
@@ -126,7 +124,8 @@ impl MetadataStorage for SqliteStorage {
         .bind(&template.template_ref.digest)
         .bind(&template.author)
         .bind(published_at)
-        .bind(template_json)
+        .bind(&template.content_s3_key)
+        .bind(&template.schema_s3_key)
         .bind(forked_from_str)
         .execute(&self.pool)
         .await
@@ -138,7 +137,7 @@ impl MetadataStorage for SqliteStorage {
     async fn get_template(&self, template_ref: &TemplateRef) -> Result<TemplateEntry> {
         let row = sqlx::query(
             r#"
-            SELECT template_ref, org, name, tag, digest, author, published_at, template_data, forked_from
+            SELECT template_ref, org, name, tag, digest, author, published_at, content_s3_key, schema_s3_key, forked_from
             FROM templates
             WHERE template_ref = ?
         "#,
@@ -151,10 +150,8 @@ impl MetadataStorage for SqliteStorage {
             _ => RegistryError::Storage(format!("Failed to get template: {}", e)),
         })?;
 
-        let template_json: String = row.get("template_data");
-        let template = serde_json::from_str(&template_json).map_err(|e| {
-            RegistryError::Storage(format!("Failed to deserialize template: {}", e))
-        })?;
+        let content_s3_key: String = row.get("content_s3_key");
+        let schema_s3_key: String = row.get("schema_s3_key");
 
         let published_at_str: String = row.get("published_at");
         let published_at = time::OffsetDateTime::parse(
@@ -168,7 +165,8 @@ impl MetadataStorage for SqliteStorage {
             .and_then(|s| s.parse().ok());
 
         Ok(TemplateEntry {
-            template,
+            content_s3_key,
+            schema_s3_key,
             template_ref: template_ref.clone(),
             author: row.get("author"),
             forked_from,
@@ -217,7 +215,7 @@ impl MetadataStorage for SqliteStorage {
         let search_pattern = format!("%{}%", query);
         let rows = sqlx::query(
             r#"
-            SELECT template_ref, org, name, tag, digest, author, published_at, template_data, forked_from
+            SELECT template_ref, org, name, tag, digest, author, published_at, content_s3_key, schema_s3_key, forked_from
             FROM templates
             WHERE name LIKE ? OR template_ref LIKE ?
             ORDER BY name, tag
@@ -231,10 +229,8 @@ impl MetadataStorage for SqliteStorage {
 
         let mut templates = Vec::new();
         for row in rows {
-            let template_json: String = row.get("template_data");
-            let template = serde_json::from_str(&template_json).map_err(|e| {
-                RegistryError::Storage(format!("Failed to deserialize template: {}", e))
-            })?;
+            let content_s3_key: String = row.get("content_s3_key");
+            let schema_s3_key: String = row.get("schema_s3_key");
 
             let published_at_str: String = row.get("published_at");
             let published_at = time::OffsetDateTime::parse(
@@ -253,7 +249,8 @@ impl MetadataStorage for SqliteStorage {
                 .and_then(|s| s.parse().ok());
 
             templates.push(TemplateEntry {
-                template,
+                content_s3_key,
+                schema_s3_key,
                 template_ref,
                 author: row.get("author"),
                 forked_from,

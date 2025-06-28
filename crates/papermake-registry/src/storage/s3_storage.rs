@@ -176,9 +176,67 @@ impl FileStorage for S3Storage {
 
         Ok(keys)
     }
+
+    async fn save_template_content(&self, template_ref: &TemplateRef, content: &str) -> Result<String> {
+        let key = Self::template_content_key(template_ref);
+        self.put_file(&key, content.as_bytes()).await?;
+        Ok(key)
+    }
+
+    async fn save_template_schema(&self, template_ref: &TemplateRef, schema: &papermake::Schema) -> Result<String> {
+        let key = Self::template_schema_key(template_ref);
+        let schema_json = serde_json::to_string_pretty(schema)
+            .map_err(|e| RegistryError::Storage(format!("Failed to serialize schema: {}", e)))?;
+        self.put_file(&key, schema_json.as_bytes()).await?;
+        Ok(key)
+    }
+
+    async fn get_template_content(&self, s3_key: &str) -> Result<String> {
+        let bytes = self.get_file(s3_key).await?;
+        String::from_utf8(bytes)
+            .map_err(|e| RegistryError::Storage(format!("Template content is not valid UTF-8: {}", e)))
+    }
+
+    async fn get_template_schema(&self, s3_key: &str) -> Result<papermake::Schema> {
+        let bytes = self.get_file(s3_key).await?;
+        let schema_json = String::from_utf8(bytes)
+            .map_err(|e| RegistryError::Storage(format!("Schema file is not valid UTF-8: {}", e)))?;
+        serde_json::from_str(&schema_json)
+            .map_err(|e| RegistryError::Storage(format!("Failed to deserialize schema: {}", e)))
+    }
+
+    async fn delete_template_files(&self, content_key: &str, schema_key: &str) -> Result<()> {
+        // Delete content file
+        if let Err(e) = self.delete_file(content_key).await {
+            eprintln!("Warning: Failed to delete content file {}: {}", content_key, e);
+        }
+        
+        // Delete schema file
+        if let Err(e) = self.delete_file(schema_key).await {
+            eprintln!("Warning: Failed to delete schema file {}: {}", schema_key, e);
+        }
+        
+        Ok(())
+    }
 }
 
 impl S3Storage {
+    /// Generate S3 key for template content (Typst markup)
+    pub fn template_content_key(template_ref: &TemplateRef) -> String {
+        match &template_ref.org {
+            Some(org) => format!("templates/{}/{}/{}/content.typ", org, template_ref.name, template_ref.tag),
+            None => format!("templates/{}/{}/content.typ", template_ref.name, template_ref.tag),
+        }
+    }
+
+    /// Generate S3 key for template schema (JSON)
+    pub fn template_schema_key(template_ref: &TemplateRef) -> String {
+        match &template_ref.org {
+            Some(org) => format!("templates/{}/{}/{}/schema.json", org, template_ref.name, template_ref.tag),
+            None => format!("templates/{}/{}/schema.json", template_ref.name, template_ref.tag),
+        }
+    }
+
     /// Generate S3 key for template source file using Docker-style TemplateRef
     pub fn template_source_key(template_ref: &TemplateRef) -> String {
         match &template_ref.org {
@@ -234,6 +292,16 @@ mod tests {
         let template_ref = TemplateRef::new("my-template").with_tag("v1");
 
         assert_eq!(
+            S3Storage::template_content_key(&template_ref),
+            "templates/my-template/v1/content.typ"
+        );
+
+        assert_eq!(
+            S3Storage::template_schema_key(&template_ref),
+            "templates/my-template/v1/schema.json"
+        );
+
+        assert_eq!(
             S3Storage::template_source_key(&template_ref),
             "templates/my-template/v1/source.typ"
         );
@@ -252,6 +320,16 @@ mod tests {
     #[test]
     fn test_key_generation_with_org() {
         let template_ref = TemplateRef::with_org("mycompany", "invoice").with_tag("v2");
+
+        assert_eq!(
+            S3Storage::template_content_key(&template_ref),
+            "templates/mycompany/invoice/v2/content.typ"
+        );
+
+        assert_eq!(
+            S3Storage::template_schema_key(&template_ref),
+            "templates/mycompany/invoice/v2/schema.json"
+        );
 
         assert_eq!(
             S3Storage::template_source_key(&template_ref),

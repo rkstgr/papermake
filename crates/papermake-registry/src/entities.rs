@@ -1,7 +1,6 @@
 //! Core data structures for the papermake registry
 
 use crate::template_ref::TemplateRef;
-use papermake::Template;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::hash_map::DefaultHasher;
@@ -12,8 +11,11 @@ use uuid::Uuid;
 /// A template entry in the registry with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemplateEntry {
-    /// The core template from papermake
-    pub template: Template,
+    /// S3 key for the template content (Typst markup)
+    pub content_s3_key: String,
+
+    /// S3 key for the template schema (JSON)
+    pub schema_s3_key: String,
 
     /// Docker-style template reference (org/name:tag@digest)
     pub template_ref: TemplateRef,
@@ -31,38 +33,38 @@ pub struct TemplateEntry {
 
 impl TemplateEntry {
     /// Create a new published template entry
-    pub fn new(template: Template, template_ref: TemplateRef, author: String) -> Self {
-        let mut entry = Self {
-            template,
+    pub fn new(
+        content_s3_key: String,
+        schema_s3_key: String,
+        template_ref: TemplateRef,
+        author: String,
+    ) -> Self {
+        Self {
+            content_s3_key,
+            schema_s3_key,
             template_ref,
             author,
             forked_from: None,
             published_at: OffsetDateTime::now_utc(),
-        };
-
-        // Generate content digest
-        entry.generate_digest();
-        entry
+        }
     }
 
     /// Create a forked template entry
     pub fn forked_from(
-        template: Template,
+        content_s3_key: String,
+        schema_s3_key: String,
         template_ref: TemplateRef,
         author: String,
         source: TemplateRef,
     ) -> Self {
-        let mut entry = Self {
-            template,
+        Self {
+            content_s3_key,
+            schema_s3_key,
             template_ref,
             author,
             forked_from: Some(source),
             published_at: OffsetDateTime::now_utc(),
-        };
-
-        // Generate content digest
-        entry.generate_digest();
-        entry
+        }
     }
 
     /// Get the template reference string
@@ -84,19 +86,13 @@ impl TemplateEntry {
     pub fn publish(mut self, new_tag: String) -> Self {
         self.template_ref = self.template_ref.with_different_tag(new_tag);
         self.published_at = OffsetDateTime::now_utc();
-
-        // Generate new digest for published version
-        self.generate_digest();
         self
     }
 
-    /// Generate and set the content digest
+    /// Generate and set the content digest from S3 keys
     pub fn generate_digest(&mut self) {
-        let content = format!(
-            "{}|{}",
-            self.template.content,
-            serde_json::to_string(&self.template.schema).unwrap_or_default(), // TODO: should be more ergonomic
-        );
+        // Use S3 keys as the basis for digest generation
+        let content = format!("{}|{}", self.content_s3_key, self.schema_s3_key);
 
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());

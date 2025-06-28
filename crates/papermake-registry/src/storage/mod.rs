@@ -84,6 +84,23 @@ pub trait FileStorage: Send + Sync {
 
     /// List files with a prefix
     async fn list_files(&self, prefix: &str) -> Result<Vec<String>>;
+
+    // === Template Content Storage ===
+
+    /// Save template content (Typst markup) to storage and return S3 key
+    async fn save_template_content(&self, template_ref: &TemplateRef, content: &str) -> Result<String>;
+
+    /// Save template schema (JSON) to storage and return S3 key
+    async fn save_template_schema(&self, template_ref: &TemplateRef, schema: &papermake::Schema) -> Result<String>;
+
+    /// Get template content from storage by S3 key
+    async fn get_template_content(&self, s3_key: &str) -> Result<String>;
+
+    /// Get template schema from storage by S3 key
+    async fn get_template_schema(&self, s3_key: &str) -> Result<papermake::Schema>;
+
+    /// Delete template files (both content and schema)
+    async fn delete_template_files(&self, content_key: &str, schema_key: &str) -> Result<()>;
 }
 
 /// File system abstraction for Typst rendering

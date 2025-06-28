@@ -63,8 +63,21 @@ pub trait TemplateRegistry {
         author: String,
     ) -> Result<TemplateEntry>;
 
+    /// Update an existing template with new content/schema
+    async fn update_template(
+        &self,
+        template_ref: &TemplateRef,
+        template: Template,
+    ) -> Result<TemplateEntry>;
+
     /// Update render job status
     async fn update_render_job(&self, job: &RenderJob) -> Result<()>;
+
+    /// Reconstruct a Template from a TemplateEntry by fetching content and schema from storage
+    async fn reconstruct_template(&self, template_entry: &TemplateEntry) -> Result<Template>;
+
+    /// Get a template entry along with its reconstructed content in one call
+    async fn get_template_with_content(&self, template_ref: &TemplateRef) -> Result<(TemplateEntry, Template)>;
 }
 
 /// Default implementation of the template registry
@@ -102,7 +115,19 @@ impl TemplateRegistry for DefaultRegistry {
     }
 
     async fn delete_template(&self, template_ref: &TemplateRef) -> Result<()> {
-        self.metadata_storage.delete_template(template_ref).await
+        // Get template entry to find S3 keys before deletion
+        let template_entry = self.metadata_storage.get_template(template_ref).await?;
+        
+        // Delete from metadata storage first
+        self.metadata_storage.delete_template(template_ref).await?;
+        
+        // Then delete S3 files (best effort - don't fail if S3 deletion fails)
+        let _ = self.file_storage.delete_template_files(
+            &template_entry.content_s3_key,
+            &template_entry.schema_s3_key
+        ).await;
+        
+        Ok(())
     }
 
     async fn search_templates(&self, query: &str) -> Result<Vec<TemplateEntry>> {
@@ -114,13 +139,25 @@ impl TemplateRegistry for DefaultRegistry {
         template_ref: &TemplateRef,
         data: &serde_json::Value,
     ) -> Result<RenderJob> {
+        // Get template entry and content in one call
+        let (_template_entry, template) = self.get_template_with_content(template_ref).await?;
+
+        // Validate data against template schema before rendering
+        template.validate_data(data)?;
+
+        // Create render job
         let job = RenderJob::new(template_ref.clone(), data.clone());
 
-        // Save the job
+        // Save the job as pending
         self.metadata_storage.save_render_job(&job).await?;
 
         // TODO: Implement actual rendering logic
-        // For now, just return the pending job
+        // This would typically:
+        // 1. Render the template to PDF using papermake
+        // 2. Store the PDF in S3
+        // 3. Update the job status to completed with the S3 key
+        // For now, we just mark it as pending
+        
         Ok(job)
     }
 
@@ -163,17 +200,73 @@ impl TemplateRegistry for DefaultRegistry {
         template_ref: TemplateRef,
         author: String,
     ) -> Result<TemplateEntry> {
-        // Create template entry
-        let template_entry = TemplateEntry::new(template, template_ref, author);
+        // Save template content and schema to S3
+        let content_s3_key = self.file_storage.save_template_content(&template_ref, &template.content).await?;
+        let schema_s3_key = self.file_storage.save_template_schema(&template_ref, &template.schema).await?;
 
-        // Save to storage
+        // Create template entry with S3 keys
+        let mut template_entry = TemplateEntry::new(content_s3_key, schema_s3_key, template_ref, author);
+        
+        // Generate content digest based on S3 keys
+        template_entry.generate_digest();
+
+        // Save metadata to storage
         self.metadata_storage.save_template(&template_entry).await?;
 
         Ok(template_entry)
     }
 
+    async fn update_template(
+        &self,
+        template_ref: &TemplateRef,
+        template: Template,
+    ) -> Result<TemplateEntry> {
+        // Get existing template entry to preserve metadata
+        let existing_entry = self.metadata_storage.get_template(template_ref).await?;
+
+        // Save updated content and schema to S3 (overwrites existing files)
+        let content_s3_key = self.file_storage.save_template_content(template_ref, &template.content).await?;
+        let schema_s3_key = self.file_storage.save_template_schema(template_ref, &template.schema).await?;
+
+        // Create updated template entry preserving original metadata
+        let mut updated_entry = TemplateEntry {
+            content_s3_key,
+            schema_s3_key,
+            template_ref: template_ref.clone(),
+            author: existing_entry.author,
+            forked_from: existing_entry.forked_from,
+            published_at: existing_entry.published_at, // Keep original publish time
+        };
+
+        // Generate new content digest
+        updated_entry.generate_digest();
+
+        // Save updated metadata to storage
+        self.metadata_storage.save_template(&updated_entry).await?;
+
+        Ok(updated_entry)
+    }
+
     async fn update_render_job(&self, job: &RenderJob) -> Result<()> {
         self.metadata_storage.save_render_job(job).await
+    }
+
+    async fn reconstruct_template(&self, template_entry: &TemplateEntry) -> Result<Template> {
+        // Fetch content and schema from S3
+        let content = self.file_storage.get_template_content(&template_entry.content_s3_key).await?;
+        let schema = self.file_storage.get_template_schema(&template_entry.schema_s3_key).await?;
+
+        Ok(Template::new(content, schema))
+    }
+
+    async fn get_template_with_content(&self, template_ref: &TemplateRef) -> Result<(TemplateEntry, Template)> {
+        // Get template entry
+        let template_entry = self.metadata_storage.get_template(template_ref).await?;
+        
+        // Reconstruct the template
+        let template = self.reconstruct_template(&template_entry).await?;
+        
+        Ok((template_entry, template))
     }
 }
 
