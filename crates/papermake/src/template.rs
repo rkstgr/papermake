@@ -36,16 +36,7 @@ impl Template {
 
     /// Render the template with data to a PDF
     pub fn render(&self, data: &serde_json::Value) -> Result<crate::render::RenderResult> {
-        crate::render::render_pdf(self, data, None)
-    }
-
-    /// Render the template with data and options to a PDF
-    pub fn render_with_options(
-        &self,
-        data: &serde_json::Value,
-        options: crate::render::RenderOptions,
-    ) -> Result<crate::render::RenderResult> {
-        crate::render::render_pdf(self, data, Some(options))
+        crate::render::render_pdf(self, data)
     }
 
     /// Render the template with data using a cached world
@@ -54,7 +45,7 @@ impl Template {
         data: &serde_json::Value,
         world_cache: Option<&mut crate::typst::TypstWorld>,
     ) -> Result<crate::render::RenderResult> {
-        crate::render::render_pdf_with_cache(self, data, world_cache, None)
+        crate::render::render_pdf_with_cache(self, data, world_cache)
     }
 
     /// Render the template with data, options, and cached world
@@ -62,9 +53,8 @@ impl Template {
         &self,
         data: &serde_json::Value,
         world_cache: Option<&mut crate::typst::TypstWorld>,
-        options: crate::render::RenderOptions,
     ) -> Result<crate::render::RenderResult> {
-        crate::render::render_pdf_with_cache(self, data, world_cache, Some(options))
+        crate::render::render_pdf_with_cache(self, data, world_cache)
     }
 
     pub fn from_file_content(content: &str) -> Result<Self> {

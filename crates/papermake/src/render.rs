@@ -1,39 +1,20 @@
 //! PDF rendering functionality
 
 use serde::Serialize;
-use typst::WorldExt;
 use typst::World;
+use typst::WorldExt;
 use typst_pdf::PdfOptions;
 
+use crate::PapermakeError;
 use crate::error::Result;
 use crate::template::Template;
 use crate::typst::TypstWorld;
-use crate::PapermakeError;
-
-/// Options for PDF rendering
-#[derive(Debug, Clone)]
-pub struct RenderOptions {
-    /// Paper size (e.g., "a4", "letter")
-    pub paper_size: String,
-    
-    /// Whether to compress the output PDF
-    pub compress: bool,
-}
-
-impl Default for RenderOptions {
-    fn default() -> Self {
-        RenderOptions {
-            paper_size: "a4".to_string(),
-            compress: true,
-        }
-    }
-}
 
 #[derive(Debug, Serialize)]
 pub struct RenderError {
     pub message: String,
     pub start: usize,
-    pub end: usize
+    pub end: usize,
 }
 
 impl std::fmt::Display for RenderError {
@@ -49,21 +30,17 @@ pub struct RenderResult {
 }
 
 /// Render a template with data to a PDF
-pub fn render_pdf(
-    template: &Template,
-    data: &serde_json::Value,
-    _options: Option<RenderOptions>,
-) -> Result<RenderResult> {
+pub fn render_pdf(template: &Template, data: &serde_json::Value) -> Result<RenderResult> {
     // Validate data against schema
     template.validate_data(data)?;
-    
+
     let world = TypstWorld::new(
         template.content.clone(),
         serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
     );
 
     let compile_result = typst::compile(&world);
-    
+
     let mut errors = Vec::new();
     let mut pdf = None;
 
@@ -80,7 +57,8 @@ pub fn render_pdf(
                             errors.push(RenderError {
                                 message: diagnostic.message.to_string(),
                                 start: range.start,
-                                end: range.end,});
+                                end: range.end,
+                            });
                         }
                     }
                 }
@@ -88,28 +66,27 @@ pub fn render_pdf(
         }
     }
 
-    Ok(RenderResult {
-        pdf,
-        errors,
-    })
+    Ok(RenderResult { pdf, errors })
 }
 
 pub fn render_pdf_with_cache(
     template: &Template,
     data: &serde_json::Value,
-    world_cache: Option<&mut TypstWorld>, // Add a cache parameter
-    _options: Option<RenderOptions>,
+    world_cache: Option<&mut TypstWorld>,
 ) -> Result<RenderResult> {
     // Validate data against schema
     template.validate_data(data)?;
-    
+
     // Either use the cached world or create a new one
     let world = match world_cache {
         Some(cached_world) => {
             // Update the inputs in the existing world
-            cached_world.update_data(
-                serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
-            ).map_err(|e| PapermakeError::Rendering(e.to_string()))?;
+            cached_world
+                .update_data(
+                    serde_json::to_string(&data)
+                        .map_err(|e| PapermakeError::Rendering(e.to_string()))?,
+                )
+                .map_err(|e| PapermakeError::Rendering(e.to_string()))?;
             // Make sure to reset tracking state
             // cached_world.reset(); TODO: Implement this
             cached_world
@@ -138,7 +115,8 @@ pub fn render_pdf_with_cache(
                             errors.push(RenderError {
                                 message: diagnostic.message.to_string(),
                                 start: range.start,
-                                end: range.end,});
+                                end: range.end,
+                            });
                         }
                     }
                 }
@@ -146,8 +124,5 @@ pub fn render_pdf_with_cache(
         }
     }
 
-    Ok(RenderResult {
-        pdf,
-        errors,
-    })
+    Ok(RenderResult { pdf, errors })
 }

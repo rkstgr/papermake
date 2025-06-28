@@ -11,7 +11,7 @@ pub mod typst;
 // Re-export core types
 pub use cache::{CachedTemplate, TemplateCache};
 pub use error::{PapermakeError, Result};
-pub use render::{RenderOptions, RenderResult, render_pdf};
+pub use render::{RenderResult, render_pdf};
 pub use schema::{FieldType, Schema, SchemaBuilder, SchemaField};
 pub use template::{Template, TemplateBuilder};
 pub use typst::{TypstFileSystem, TypstWorld};

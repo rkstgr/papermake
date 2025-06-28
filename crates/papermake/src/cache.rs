@@ -1,6 +1,6 @@
 //! Template-level caching for improved performance
 
-use crate::render::{RenderOptions, RenderResult};
+use crate::render::RenderResult;
 use crate::typst::TypstWorld;
 use crate::{PapermakeError, Result, Template};
 use std::sync::{Arc, Mutex};
@@ -21,17 +21,8 @@ impl CachedTemplate {
         }
     }
 
-    /// Render the template with data, using the cached world for performance
-    pub fn render(&self, data: &serde_json::Value) -> Result<RenderResult> {
-        self.render_with_options(data, RenderOptions::default())
-    }
-
     /// Render the template with data and options, using the cached world
-    pub fn render_with_options(
-        &self,
-        data: &serde_json::Value,
-        options: RenderOptions,
-    ) -> Result<RenderResult> {
+    pub fn render(&self, data: &serde_json::Value) -> Result<RenderResult> {
         let mut cache_guard = self
             .world_cache
             .lock()
@@ -41,12 +32,7 @@ impl CachedTemplate {
         match cache_guard.as_mut() {
             Some(cached_world) => {
                 // Use existing cached world
-                crate::render::render_pdf_with_cache(
-                    &self.template,
-                    data,
-                    Some(cached_world),
-                    Some(options),
-                )
+                crate::render::render_pdf_with_cache(&self.template, data, Some(cached_world))
             }
             None => {
                 // Create new world and cache it
@@ -59,7 +45,6 @@ impl CachedTemplate {
                     &self.template,
                     data,
                     Some(&mut new_world),
-                    Some(options),
                 )?;
                 *cache_guard = Some(new_world);
                 Ok(result)
