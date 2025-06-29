@@ -39,6 +39,10 @@
 //! ).await?;
 //!
 //! println!("Published template with manifest hash: {}", manifest_hash);
+//!
+//! // Resolve the template back
+//! let resolved_hash = registry.resolve("alice/invoice-template:latest").await?;
+//! assert_eq!(manifest_hash, resolved_hash);
 //! # Ok(())
 //! # }
 //! ```

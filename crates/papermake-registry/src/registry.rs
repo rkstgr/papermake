@@ -6,7 +6,8 @@ use crate::{
     bundle::TemplateBundle,
     error::{RegistryError, StorageError},
     manifest::Manifest,
-    storage::BlobStorage,
+    reference::Reference,
+    storage::{BlobStorage, filesystem::RegistryFileSystem},
 };
 
 /// Core registry for template publishing and resolution
@@ -14,7 +15,7 @@ pub struct Registry<S: BlobStorage> {
     storage: Arc<S>,
 }
 
-impl<S: BlobStorage> Registry<S> {
+impl<S: BlobStorage + 'static> Registry<S> {
     /// Create a new registry with the given storage backend
     pub fn new(storage: S) -> Self {
         Self {
@@ -95,6 +96,173 @@ impl<S: BlobStorage> Registry<S> {
 
         // Return the manifest hash for content-addressable access
         Ok(manifest_hash)
+    }
+
+    /// Resolve a template reference to its manifest hash
+    ///
+    /// This method implements the "tag → manifest hash lookup" workflow:
+    /// 1. Parses the reference string (namespace/name:tag[@hash])
+    /// 2. Looks up the reference in storage to get the manifest hash
+    /// 3. Optionally verifies the hash if provided in the reference
+    /// 4. Returns the manifest hash for content-addressable access
+    ///
+    /// # Examples
+    /// - `"invoice:latest"` → resolves official template
+    /// - `"john/invoice:v1.0.0"` → resolves user template
+    /// - `"john/invoice:latest@sha256:abc123"` → resolves with hash verification
+    pub async fn resolve(&self, reference: &str) -> Result<String, RegistryError> {
+        // Step 1: Parse the reference
+        let parsed_ref = Reference::parse(reference)?;
+
+        // Step 2: Build the namespace/tag path for storage lookup
+        let namespace_path = match &parsed_ref.namespace {
+            Some(ns) => format!("{}/{}", ns, parsed_ref.name),
+            None => parsed_ref.name.clone(),
+        };
+        let tag = parsed_ref.tag_or_default();
+        let ref_key = ContentAddress::ref_key(&namespace_path, tag);
+
+        // Step 3: Look up the manifest hash from storage
+        let manifest_hash_bytes = self.storage.get(&ref_key).await.map_err(|e| match e {
+            crate::storage::blob_storage::StorageError::NotFound(_) => {
+                RegistryError::Template(crate::error::TemplateError::not_found(reference))
+            }
+            _ => RegistryError::Storage(StorageError::backend(e.to_string())),
+        })?;
+
+        let manifest_hash = String::from_utf8(manifest_hash_bytes).map_err(|e| {
+            RegistryError::Storage(StorageError::backend(format!(
+                "Invalid UTF-8 in stored manifest hash: {}",
+                e
+            )))
+        })?;
+
+        // Step 4: Verify hash if provided in reference
+        if let Some(expected_hash) = &parsed_ref.hash {
+            if &manifest_hash != expected_hash {
+                return Err(RegistryError::Reference(
+                    crate::error::ReferenceError::hash_mismatch(
+                        reference.to_string(),
+                        expected_hash.clone(),
+                        manifest_hash,
+                    ),
+                ));
+            }
+        }
+
+        // Return the manifest hash
+        Ok(manifest_hash)
+    }
+
+    /// Render a template to PDF using JSON data
+    ///
+    /// This method implements the end-to-end template rendering workflow:
+    /// 1. Resolves the template reference to get the manifest hash
+    /// 2. Loads the manifest from storage to get file mappings
+    /// 3. Creates a RegistryFileSystem that resolves files through blob storage
+    /// 4. Uses papermake to render the template with the provided data
+    ///
+    /// # Arguments
+    /// * `reference` - Template reference (e.g., "john/invoice:latest")
+    /// * `data` - JSON data to inject into the template
+    ///
+    /// # Returns
+    /// Returns the PDF bytes on successful rendering
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// use papermake_registry::Registry;
+    /// use papermake_registry::storage::blob_storage::MemoryStorage;
+    /// use serde_json::json;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = MemoryStorage::new();
+    /// let registry = Registry::new(storage);
+    ///
+    /// let pdf_bytes = registry.render(
+    ///     "john/invoice:latest",
+    ///     &json!({
+    ///         "customer_name": "Acme Corp",
+    ///         "total": "$1,000.00"
+    ///     })
+    /// ).await?;
+    ///
+    /// println!("Generated PDF: {} bytes", pdf_bytes.len());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn render(
+        &self,
+        reference: &str,
+        data: &serde_json::Value,
+    ) -> Result<Vec<u8>, RegistryError> {
+        // Step 1: Resolve the template reference to get manifest hash
+        let manifest_hash = self.resolve(reference).await?;
+
+        // Step 2: Load the manifest from storage
+        let manifest_key = ContentAddress::manifest_key(&manifest_hash);
+        let manifest_bytes = self.storage.get(&manifest_key).await.map_err(|e| {
+            RegistryError::Storage(StorageError::backend(format!(
+                "Failed to load manifest {}: {}",
+                manifest_hash, e
+            )))
+        })?;
+
+        let manifest = Manifest::from_bytes(&manifest_bytes).map_err(|e| {
+            RegistryError::ContentAddressing(crate::error::ContentAddressingError::manifest_error(
+                e.to_string(),
+            ))
+        })?;
+
+        // Step 3: Get the entrypoint content
+        let entrypoint_hash = manifest.entrypoint_hash().ok_or_else(|| {
+            RegistryError::Template(crate::error::TemplateError::invalid(
+                "Manifest missing entrypoint hash",
+            ))
+        })?;
+
+        let entrypoint_key = ContentAddress::blob_key(entrypoint_hash);
+        let entrypoint_bytes = self.storage.get(&entrypoint_key).await.map_err(|e| {
+            RegistryError::Storage(StorageError::backend(format!(
+                "Failed to load entrypoint file: {}",
+                e
+            )))
+        })?;
+
+        let entrypoint_content = String::from_utf8(entrypoint_bytes).map_err(|e| {
+            RegistryError::Template(crate::error::TemplateError::invalid(format!(
+                "Entrypoint file is not valid UTF-8: {}",
+                e
+            )))
+        })?;
+
+        // Step 4: Create RegistryFileSystem for resolving imports
+        let file_system = RegistryFileSystem::new(self.storage.clone(), manifest)?;
+
+        // Step 5: Render the template using papermake
+        let render_result =
+            papermake::render_template(entrypoint_content, Arc::new(file_system), data)
+                .map_err(|e| RegistryError::Compilation(e))?;
+
+        // Check if rendering was successful
+        if render_result.success {
+            render_result.pdf.ok_or_else(|| {
+                RegistryError::Template(crate::error::TemplateError::invalid(
+                    "Rendering succeeded but no PDF was generated",
+                ))
+            })
+        } else {
+            // Collect error messages
+            let error_messages: Vec<String> =
+                render_result.errors.iter().map(|e| e.to_string()).collect();
+
+            Err(RegistryError::Template(
+                crate::error::TemplateError::invalid(format!(
+                    "Template rendering failed: {}",
+                    error_messages.join("; ")
+                )),
+            ))
+        }
     }
 }
 
@@ -215,5 +383,359 @@ Hello #data.name"#
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), RegistryError::Template(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_basic() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // First publish a template
+        let manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Then resolve it back
+        let resolved_hash = registry.resolve("john/invoice:latest").await.unwrap();
+
+        assert_eq!(manifest_hash, resolved_hash);
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_different_reference_formats() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish template
+        let manifest_hash = registry
+            .publish(bundle, "john/invoice", "v1.0.0")
+            .await
+            .unwrap();
+
+        // Test different ways to resolve the same template
+
+        // With explicit tag
+        let resolved1 = registry.resolve("john/invoice:v1.0.0").await.unwrap();
+        assert_eq!(manifest_hash, resolved1);
+
+        // Without namespace (should fail since we published with namespace)
+        let result = registry.resolve("invoice:v1.0.0").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Template(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_with_hash_verification() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish template
+        let manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Resolve with correct hash verification
+        let reference_with_hash = format!("john/invoice:latest@{}", manifest_hash);
+        let resolved_hash = registry.resolve(&reference_with_hash).await.unwrap();
+        assert_eq!(manifest_hash, resolved_hash);
+
+        // Resolve with incorrect hash verification (should fail)
+        let wrong_hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let reference_with_wrong_hash = format!("john/invoice:latest@{}", wrong_hash);
+        let result = registry.resolve(&reference_with_wrong_hash).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Reference(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_default_tag() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish with explicit "latest" tag
+        let manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Resolve without tag (should default to "latest")
+        let resolved_hash = registry.resolve("john/invoice").await.unwrap();
+        assert_eq!(manifest_hash, resolved_hash);
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_nonexistent_template() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        // Try to resolve a template that doesn't exist
+        let result = registry.resolve("nonexistent/template:latest").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Template(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_invalid_reference_format() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        // Try to resolve with invalid reference format
+        let result = registry.resolve("").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Reference(_)));
+
+        // Try to resolve with hash only
+        let result = registry.resolve("@sha256:abc123").await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Reference(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_resolve_official_template() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish an official template (no namespace)
+        let manifest_hash = registry.publish(bundle, "invoice", "latest").await.unwrap();
+
+        // Resolve official template
+        let resolved_hash = registry.resolve("invoice:latest").await.unwrap();
+        assert_eq!(manifest_hash, resolved_hash);
+
+        // Also test without explicit tag
+        let resolved_hash2 = registry.resolve("invoice").await.unwrap();
+        assert_eq!(manifest_hash, resolved_hash2);
+    }
+
+    #[tokio::test]
+    async fn test_registry_publish_resolve_integration() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        // Create multiple templates with different namespaces and tags
+        let metadata1 = TemplateMetadata::new("Invoice Template", "john@example.com");
+        let metadata2 = TemplateMetadata::new("Invoice Template", "alice@example.com");
+        let metadata3 = TemplateMetadata::new("Official Invoice", "admin@example.com");
+
+        let content1 = b"Invoice v1 content".to_vec();
+        let content2 = b"Invoice v2 content".to_vec();
+        let content3 = b"Official invoice content".to_vec();
+
+        let bundle1 = TemplateBundle::new(content1, metadata1);
+        let bundle2 = TemplateBundle::new(content2, metadata2);
+        let bundle3 = TemplateBundle::new(content3, metadata3);
+
+        // Publish multiple versions and namespaces
+        let hash1 = registry
+            .publish(bundle1, "john/invoice", "v1.0.0")
+            .await
+            .unwrap();
+        let hash2 = registry
+            .publish(bundle2, "alice/invoice", "latest")
+            .await
+            .unwrap();
+        let hash3 = registry
+            .publish(bundle3, "invoice", "official")
+            .await
+            .unwrap();
+
+        // Resolve each template
+        let resolved1 = registry.resolve("john/invoice:v1.0.0").await.unwrap();
+        let resolved2 = registry.resolve("alice/invoice:latest").await.unwrap();
+        let resolved3 = registry.resolve("invoice:official").await.unwrap();
+
+        assert_eq!(hash1, resolved1);
+        assert_eq!(hash2, resolved2);
+        assert_eq!(hash3, resolved3);
+
+        // Test cross-namespace isolation (these should fail)
+        assert!(registry.resolve("john/invoice:latest").await.is_err());
+        assert!(registry.resolve("alice/invoice:v1.0.0").await.is_err());
+        assert!(registry.resolve("invoice:v1.0.0").await.is_err());
+
+        // Test with hash verification
+        let reference_with_hash = format!("john/invoice:v1.0.0@{}", hash1);
+        let verified_hash = registry.resolve(&reference_with_hash).await.unwrap();
+        assert_eq!(hash1, verified_hash);
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_basic() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish template
+        let _manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Render template
+        let data = serde_json::json!({
+            "name": "Test Customer"
+        });
+
+        let pdf_bytes = registry.render("john/invoice:latest", &data).await.unwrap();
+
+        assert!(!pdf_bytes.is_empty());
+        // PDF should start with PDF header
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_nonexistent_template() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        let data = serde_json::json!({
+            "name": "Test Customer"
+        });
+
+        let result = registry.render("nonexistent/template:latest", &data).await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Template(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_with_hash_verification() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish template
+        let manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Render with hash verification
+        let data = serde_json::json!({
+            "name": "Test Customer"
+        });
+
+        let reference_with_hash = format!("john/invoice:latest@{}", manifest_hash);
+        let pdf_bytes = registry.render(&reference_with_hash, &data).await.unwrap();
+
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_with_wrong_hash() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish template
+        let _manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Try to render with wrong hash
+        let data = serde_json::json!({
+            "name": "Test Customer"
+        });
+
+        let wrong_hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+        let reference_with_wrong_hash = format!("john/invoice:latest@{}", wrong_hash);
+
+        let result = registry.render(&reference_with_wrong_hash, &data).await;
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), RegistryError::Reference(_)));
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_template_with_imports() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        // Create a template with imports
+        let metadata = TemplateMetadata::new("Template with Imports", "test@example.com");
+        let main_content = br#"#import "header.typ": header
+
+#header(data.title)
+
+= Template Body
+Content: #data.content"#
+            .to_vec();
+
+        let header_content = br#"#let header(title) = [
+  = #title
+  #line(length: 100%)
+]"#
+        .to_vec();
+
+        let bundle =
+            TemplateBundle::new(main_content, metadata).add_file("header.typ", header_content);
+
+        // Publish template
+        let _manifest_hash = registry
+            .publish(bundle, "john/complex-template", "latest")
+            .await
+            .unwrap();
+
+        // Render template
+        let data = serde_json::json!({
+            "title": "Invoice Template",
+            "content": "This is a test invoice"
+        });
+
+        let pdf_bytes = registry
+            .render("john/complex-template:latest", &data)
+            .await
+            .unwrap();
+
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_different_data() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish template
+        let _manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        // Render with different data sets
+        let data1 = serde_json::json!({
+            "name": "Customer A"
+        });
+
+        let data2 = serde_json::json!({
+            "name": "Customer B"
+        });
+
+        let pdf1 = registry
+            .render("john/invoice:latest", &data1)
+            .await
+            .unwrap();
+
+        let pdf2 = registry
+            .render("john/invoice:latest", &data2)
+            .await
+            .unwrap();
+
+        // Both should be valid PDFs
+        assert!(pdf1.starts_with(b"%PDF"));
+        assert!(pdf2.starts_with(b"%PDF"));
+
+        // PDFs should be different (different content)
+        assert_ne!(pdf1, pdf2);
     }
 }
