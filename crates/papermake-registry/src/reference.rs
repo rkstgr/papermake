@@ -1,6 +1,5 @@
-use std::str::FromStr;
-
 use crate::error::ReferenceError;
+use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reference {
@@ -14,7 +13,10 @@ impl Reference {
     /// Parse reference string: [namespace/]name[:tag][@hash]
     pub fn parse(reference: &str) -> Result<Self, ReferenceError> {
         if reference.is_empty() {
-            return Err(ReferenceError::InvalidFormat);
+            return Err(ReferenceError::InvalidFormat {
+                reference: reference.to_string(),
+                reason: "Empty reference".to_string(),
+            });
         }
 
         // Convert to lowercase for case insensitivity
@@ -22,14 +24,19 @@ impl Reference {
 
         // Handle edge case: starts with @ (hash only)
         if reference.starts_with('@') {
-            return Err(ReferenceError::HashOnly);
+            return Err(ReferenceError::InvalidFormat {
+                reference: reference.clone(),
+                reason: "Hash without namespace/name not allowed".to_string(),
+            });
         }
 
         // Split by @ to separate hash
         let (main_part, hash) = if let Some(at_pos) = reference.rfind('@') {
             let hash_part = &reference[at_pos + 1..];
             if hash_part.is_empty() {
-                return Err(ReferenceError::InvalidHash("Empty hash".into()));
+                return Err(ReferenceError::InvalidHash {
+                    hash: "".to_string(),
+                });
             }
             (reference[..at_pos].to_string(), Some(hash_part.to_string()))
         } else {
@@ -45,7 +52,10 @@ impl Reference {
         let (namespace_name_part, tag) = if let Some(colon_pos) = main_part.rfind(':') {
             let tag_part = &main_part[colon_pos + 1..];
             if tag_part.is_empty() {
-                return Err(ReferenceError::EmptyTag);
+                return Err(ReferenceError::InvalidTag {
+                    tag: "".to_string(),
+                    reason: "Empty tag not allowed".to_string(),
+                });
             }
             (
                 main_part[..colon_pos].to_string(),
@@ -89,22 +99,22 @@ impl Reference {
     /// Validate hash format (must start with sha256:)
     fn validate_hash(hash: &str) -> Result<(), ReferenceError> {
         if !hash.starts_with("sha256:") {
-            return Err(ReferenceError::InvalidHash(
-                "Hash must start with 'sha256:'".into(),
-            ));
+            return Err(ReferenceError::InvalidHash {
+                hash: hash.to_string(),
+            });
         }
 
         let hex_part = &hash[7..]; // Skip "sha256:"
         if hex_part.len() != 64 {
-            return Err(ReferenceError::InvalidHash(
-                "SHA256 hash must be 64 hex characters".into(),
-            ));
+            return Err(ReferenceError::InvalidHash {
+                hash: hash.to_string(),
+            });
         }
 
         if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
-            return Err(ReferenceError::InvalidHash(
-                "Hash contains invalid characters".into(),
-            ));
+            return Err(ReferenceError::InvalidHash {
+                hash: hash.to_string(),
+            });
         }
 
         Ok(())
@@ -113,9 +123,10 @@ impl Reference {
     /// Validate namespace format (Docker registry rules: lowercase, alphanumeric, dots, dashes, underscores)
     fn validate_namespace(namespace: &str) -> Result<(), ReferenceError> {
         if namespace.is_empty() || namespace.len() > 255 {
-            return Err(ReferenceError::InvalidNamespace(
-                "Namespace length must be 1-255 characters".into(),
-            ));
+            return Err(ReferenceError::InvalidNamespace {
+                namespace: namespace.to_string(),
+                reason: "Namespace length must be 1-255 characters".to_string(),
+            });
         }
 
         // Docker registry naming rules
@@ -124,7 +135,10 @@ impl Reference {
         });
 
         if !valid_chars {
-            return Err(ReferenceError::InvalidNamespace("Namespace can only contain lowercase letters, digits, dots, dashes, and underscores".into()));
+            return Err(ReferenceError::InvalidNamespace {
+                namespace: namespace.to_string(),
+                reason: "Namespace can only contain lowercase letters, digits, dots, dashes, and underscores".to_string(),
+            });
         }
 
         // Cannot start or end with special characters
@@ -135,9 +149,10 @@ impl Reference {
             || namespace.ends_with('-')
             || namespace.ends_with('_')
         {
-            return Err(ReferenceError::InvalidNamespace(
-                "Namespace cannot start or end with '.', '-', or '_'".into(),
-            ));
+            return Err(ReferenceError::InvalidNamespace {
+                namespace: namespace.to_string(),
+                reason: "Namespace cannot start or end with '.', '-', or '_'".to_string(),
+            });
         }
 
         Ok(())
@@ -146,9 +161,10 @@ impl Reference {
     /// Validate name format (same rules as namespace)
     fn validate_name(name: &str) -> Result<(), ReferenceError> {
         if name.is_empty() || name.len() > 255 {
-            return Err(ReferenceError::InvalidName(
-                "Name length must be 1-255 characters".into(),
-            ));
+            return Err(ReferenceError::InvalidFormat {
+                reference: name.to_string(),
+                reason: "Name length must be 1-255 characters".to_string(),
+            });
         }
 
         let valid_chars = name.chars().all(|c| {
@@ -156,10 +172,12 @@ impl Reference {
         });
 
         if !valid_chars {
-            return Err(ReferenceError::InvalidName(
-                "Name can only contain lowercase letters, digits, dots, dashes, and underscores"
-                    .into(),
-            ));
+            return Err(ReferenceError::InvalidFormat {
+                reference: name.to_string(),
+                reason:
+                    "Name can only contain lowercase letters, digits, dots, dashes, and underscores"
+                        .to_string(),
+            });
         }
 
         if name.starts_with('.')
@@ -169,9 +187,10 @@ impl Reference {
             || name.ends_with('-')
             || name.ends_with('_')
         {
-            return Err(ReferenceError::InvalidName(
-                "Name cannot start or end with '.', '-', or '_'".into(),
-            ));
+            return Err(ReferenceError::InvalidFormat {
+                reference: name.to_string(),
+                reason: "Name cannot start or end with '.', '-', or '_'".to_string(),
+            });
         }
 
         Ok(())
@@ -180,9 +199,10 @@ impl Reference {
     /// Validate tag format (semantic versioning or simple tags)
     fn validate_tag(tag: &str) -> Result<(), ReferenceError> {
         if tag.is_empty() || tag.len() > 128 {
-            return Err(ReferenceError::InvalidTag(
-                "Tag length must be 1-128 characters".into(),
-            ));
+            return Err(ReferenceError::InvalidTag {
+                tag: tag.to_string(),
+                reason: "Tag length must be 1-128 characters".to_string(),
+            });
         }
 
         // Allow alphanumeric, dots, dashes, underscores
@@ -191,10 +211,12 @@ impl Reference {
         });
 
         if !valid_chars {
-            return Err(ReferenceError::InvalidTag(
-                "Tag can only contain lowercase letters, digits, dots, dashes, and underscores"
-                    .into(),
-            ));
+            return Err(ReferenceError::InvalidTag {
+                tag: tag.to_string(),
+                reason:
+                    "Tag can only contain lowercase letters, digits, dots, dashes, and underscores"
+                        .to_string(),
+            });
         }
 
         Ok(())
@@ -326,7 +348,7 @@ mod tests {
     fn test_empty_tag_error() {
         assert!(matches!(
             Reference::parse("john/invoice:"),
-            Err(ReferenceError::EmptyTag)
+            Err(ReferenceError::InvalidTag { .. })
         ));
     }
 
@@ -334,7 +356,7 @@ mod tests {
     fn test_hash_only_error() {
         assert!(matches!(
             Reference::parse("@sha256:abc123"),
-            Err(ReferenceError::HashOnly)
+            Err(ReferenceError::InvalidFormat { .. })
         ));
     }
 
@@ -342,15 +364,25 @@ mod tests {
     fn test_invalid_hash_format() {
         assert!(matches!(
             Reference::parse("john/invoice@abc123"),
-            Err(ReferenceError::InvalidHash(_))
+            Err(ReferenceError::InvalidHash { .. })
         ));
     }
 
     #[test]
     fn test_invalid_namespace_chars() {
+        // Test actual invalid namespace characters
         assert!(matches!(
             Reference::parse("john$/invoice"),
-            Err(ReferenceError::InvalidNamespace(_))
+            Err(ReferenceError::InvalidNamespace { .. })
+        ));
+    }
+
+    #[test]
+    fn test_invalid_hash_in_reference() {
+        // This gets parsed as hash="/invoice" which is invalid
+        assert!(matches!(
+            Reference::parse("john@/invoice"),
+            Err(ReferenceError::InvalidHash { .. })
         ));
     }
 
