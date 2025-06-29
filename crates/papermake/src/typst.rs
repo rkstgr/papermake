@@ -39,7 +39,7 @@ static CACHED_FONTS: Lazy<(FontBook, Vec<Font>)> = Lazy::new(|| {
 ///
 /// This trait provides file access to TypstWorld during rendering,
 /// allowing integration with various storage backends.
-pub trait TypstFileSystem: Send + Sync {
+pub trait RenderFileSystem: Send + Sync {
     /// Get file content by path
     fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError>;
 }
@@ -69,7 +69,7 @@ pub struct PapermakeWorld {
     time: time::OffsetDateTime,
 
     /// File system abstraction for loading template files/assets
-    file_system: Option<Arc<dyn TypstFileSystem>>,
+    file_system: Option<Arc<dyn RenderFileSystem>>,
 }
 
 impl std::fmt::Debug for PapermakeWorld {
@@ -124,7 +124,7 @@ impl PapermakeWorld {
     pub fn with_file_system(
         template_content: String,
         data: String,
-        file_system: Arc<dyn TypstFileSystem>,
+        file_system: Arc<dyn RenderFileSystem>,
     ) -> Self {
         let mut world = Self::new(template_content, data);
         world.file_system = Some(file_system);
@@ -278,7 +278,7 @@ impl InMemoryFileSystem {
     }
 }
 
-impl TypstFileSystem for InMemoryFileSystem {
+impl RenderFileSystem for InMemoryFileSystem {
     fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError> {
         self.files
             .get(path)
