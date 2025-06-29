@@ -55,6 +55,9 @@
 
 pub mod address;
 pub mod bundle;
+pub mod error;
+pub mod manifest;
+pub mod reference;
 pub mod storage;
 
 pub use storage::{BlobStorage, TypstFileSystem};

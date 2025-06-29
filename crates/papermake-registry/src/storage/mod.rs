@@ -2,12 +2,12 @@
 
 use async_trait::async_trait;
 
-// Re-export for convenience
-pub use papermake::FileError;
-
 pub mod blob_storage;
+pub mod filesystem;
 
+// Re-export for convenience
 pub use blob_storage::BlobStorage;
+pub use papermake::FileError;
 
 // S3 implementation
 #[cfg(feature = "s3")]
