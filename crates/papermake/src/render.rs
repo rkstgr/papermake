@@ -10,7 +10,7 @@ use typst::World;
 use typst::WorldExt;
 use typst_pdf::PdfOptions;
 
-use crate::TypstFileSystem;
+use crate::RenderFileSystem;
 use crate::error::{CompilationError, PapermakeError, Result};
 use crate::typst::PapermakeWorld;
 
@@ -97,16 +97,13 @@ pub struct RenderResult {
 /// ```
 pub fn render_template(
     main_typ: String,
-    file_system: Arc<dyn TypstFileSystem>,
+    file_system: Arc<dyn RenderFileSystem>,
     data: &serde_json::Value,
 ) -> Result<RenderResult> {
-    // Serialize the data to JSON string for injection into Typst
     let data_str = serde_json::to_string(&data)?;
 
-    // Create the Typst world with the template and data
     let world = PapermakeWorld::with_file_system(main_typ, data_str, file_system);
 
-    // Compile the template
     let compile_result = typst::compile(&world);
 
     let mut errors = Vec::new();
@@ -187,7 +184,7 @@ pub fn render_template(
 /// as this function only updates the data, not the template structure.
 pub fn render_template_with_cache(
     main_typ: String,
-    file_system: Arc<dyn TypstFileSystem>,
+    file_system: Arc<dyn RenderFileSystem>,
     data: serde_json::Value,
     world_cache: Option<&mut PapermakeWorld>,
 ) -> Result<RenderResult> {
