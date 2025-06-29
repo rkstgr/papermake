@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::bundle::TemplateMetadata;
@@ -12,7 +12,7 @@ pub struct Manifest {
 
     /// Map of file paths to their content hashes
     /// main.typ -> sha256:<hash>
-    pub files: HashMap<String, String>,
+    pub files: BTreeMap<String, String>,
 
     /// Template metadata
     pub metadata: TemplateMetadata,
@@ -20,7 +20,7 @@ pub struct Manifest {
 
 impl Manifest {
     pub fn new(
-        files: HashMap<String, String>,
+        files: BTreeMap<String, String>,
         metadata: TemplateMetadata,
     ) -> Result<Self, ManifestError> {
         let entrypoint = "main.typ".to_string();
@@ -201,8 +201,8 @@ mod tests {
         TemplateMetadata::new("Test Template".to_string(), "test@example.com".to_string())
     }
 
-    fn create_test_files() -> HashMap<String, String> {
-        let mut files = HashMap::new();
+    fn create_test_files() -> BTreeMap<String, String> {
+        let mut files = BTreeMap::new();
         files.insert(
             "main.typ".to_string(),
             "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),
@@ -230,7 +230,7 @@ mod tests {
     #[test]
     fn test_manifest_missing_entrypoint() {
         let metadata = create_test_metadata();
-        let mut files = HashMap::new();
+        let mut files = BTreeMap::new();
         files.insert(
             "other.typ".to_string(),
             "sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef".to_string(),

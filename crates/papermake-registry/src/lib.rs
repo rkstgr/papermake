@@ -18,37 +18,27 @@
 //!
 //! ```rust,no_run
 //! use papermake_registry::*;
-//! use papermake::TemplateBuilder;
+//! use papermake_registry::bundle::{TemplateBundle, TemplateMetadata};
+//! use papermake_registry::storage::blob_storage::MemoryStorage;
 //!
-//! # async fn example() -> Result<()> {
-//! // Create a registry
-//! let storage = FileSystemStorage::new("./templates").await?;
-//! let registry = DefaultRegistry::new(storage);
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // Create a registry with memory storage
+//! let storage = MemoryStorage::new();
+//! let registry = Registry::new(storage);
 //!
-//! // Create a user
-//! let user = User::new("alice", "alice@company.com");
-//! registry.save_user(&user).await?;
+//! // Create a template bundle
+//! let metadata = TemplateMetadata::new("Invoice Template", "alice@company.com");
+//! let main_content = b"#let data = json.decode(sys.inputs.data)\n= Invoice\nFor: #data.customer_name".to_vec();
+//! let bundle = TemplateBundle::new(main_content, metadata);
 //!
-//! // Publish a template
-//! let template = TemplateBuilder::new("invoice-template".into())
-//!     .name("Invoice Template")
-//!     .content("Invoice for: #data.customer_name")
-//!     .build()?;
-//!
-//! let version = registry.publish_template(
-//!     template,
-//!     &user.id,
-//!     TemplateScope::User(user.id.clone())
+//! // Publish the template
+//! let manifest_hash = registry.publish(
+//!     bundle,
+//!     "alice/invoice-template",
+//!     "latest"
 //! ).await?;
 //!
-//! // Render with access control
-//! let data = serde_json::json!({"customer_name": "ACME Corp"});
-//! let result = registry.render(
-//!     &"invoice-template".into(),
-//!     Some(version),
-//!     &data,
-//!     &user.id
-//! ).await?;
+//! println!("Published template with manifest hash: {}", manifest_hash);
 //! # Ok(())
 //! # }
 //! ```
@@ -58,8 +48,10 @@ pub mod bundle;
 pub mod error;
 pub mod manifest;
 pub mod reference;
+pub mod registry;
 pub mod storage;
 
+pub use registry::Registry;
 pub use storage::{BlobStorage, TypstFileSystem};
 
 #[cfg(feature = "s3")]
