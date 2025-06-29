@@ -1,24 +1,22 @@
-use papermake::{Schema, Template, render_pdf};
+use std::sync::Arc;
+
+use papermake::{InMemoryFileSystem, render_template};
 use pdf::object::MaybeRef;
 use serde_json::json;
 
 #[test]
 fn test_render_pdf() {
-    // Create a template with the schema
-    let template = Template::new(
-        "test",
-        "Test Template",
-        "#let data = json.decode(sys.inputs.data)\n#set text(font: \"Arial\")\nHello #data.name!",
-        Schema::new(),
-    );
-
     // Valid data
     let data = json!({
         "name": "World"
     });
 
     // Render
-    let result = render_pdf(&template, &data);
+    let result = render_template(
+        "#set text(font: \"Arial\")\nHello #data.name!".to_string(),
+        Arc::new(InMemoryFileSystem::new()),
+        &data,
+    );
     assert!(result.is_ok());
 
     let pdf_bytes = result.unwrap();

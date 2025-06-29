@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use typst::Library;
 use typst::diag::{FileError, FileResult};
@@ -40,30 +39,13 @@ static CACHED_FONTS: Lazy<(FontBook, Vec<Font>)> = Lazy::new(|| {
 ///
 /// This trait provides file access to TypstWorld during rendering,
 /// allowing integration with various storage backends.
-#[async_trait]
 pub trait TypstFileSystem: Send + Sync {
     /// Get file content by path
-    async fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError>;
-}
-
-/// Errors that can occur during template compilation
-#[derive(Debug, thiserror::Error)]
-pub enum CompileError {
-    #[error("Typst compilation failed: {0}")]
-    TypstError(String),
-
-    #[error("Data serialization failed: {0}")]
-    DataSerialization(#[from] serde_json::Error),
-
-    #[error("File system error: {0}")]
-    FileSystem(String),
-
-    #[error("Invalid UTF-8 content: {0}")]
-    InvalidUtf8(#[from] std::string::FromUtf8Error),
+    fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError>;
 }
 
 /// Main interface that determines the environment for Typst.
-pub struct TypstWorld {
+pub struct PapermakeWorld {
     /// The content of a source.
     source: Source,
 
@@ -90,7 +72,7 @@ pub struct TypstWorld {
     file_system: Option<Arc<dyn TypstFileSystem>>,
 }
 
-impl std::fmt::Debug for TypstWorld {
+impl std::fmt::Debug for PapermakeWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TypstWorld")
             .field("source", &self.source)
@@ -108,7 +90,7 @@ impl std::fmt::Debug for TypstWorld {
     }
 }
 
-impl TypstWorld {
+impl PapermakeWorld {
     /// Create a new TypstWorld with the given template content and data
     pub fn new(template_content: String, data: String) -> Self {
         // Use the cached fonts directly
@@ -150,7 +132,7 @@ impl TypstWorld {
     }
 
     /// Update the data available to the template
-    pub fn update_data(&mut self, data: String) -> Result<(), CompileError> {
+    pub fn update_data(&mut self, data: String) -> Result<(), crate::error::PapermakeError> {
         // Update the data in the inputs dictionary
         let mut inputs_dict = Dict::new();
         inputs_dict.insert("data".into(), data.as_str().into_value());
@@ -191,7 +173,7 @@ impl FileEntry {
     }
 }
 
-impl TypstWorld {
+impl PapermakeWorld {
     /// Helper to handle file requests.
     ///
     /// Requests will be either in packages or a local file.
@@ -205,12 +187,8 @@ impl TypstWorld {
         if let Some(fs) = &self.file_system {
             let path = self.id_to_path(id)?;
 
-            // Use tokio runtime to block on async call
-            let rt = tokio::runtime::Handle::try_current()
-                .map_err(|_| FileError::Other(Some("No tokio runtime available".into())))?;
-
-            let content = rt
-                .block_on(fs.get_file(&path))
+            let content = fs
+                .get_file(&path)
                 .map_err(|_| FileError::NotFound(path.into()))?;
 
             let entry = FileEntry::new(content, None);
@@ -237,7 +215,7 @@ impl TypstWorld {
 }
 
 /// This is the interface we have to implement such that `typst` can compile it.
-impl typst::World for TypstWorld {
+impl typst::World for PapermakeWorld {
     /// Standard library.
     fn library(&self) -> &LazyHash<Library> {
         &self.library
@@ -300,9 +278,8 @@ impl InMemoryFileSystem {
     }
 }
 
-#[async_trait]
 impl TypstFileSystem for InMemoryFileSystem {
-    async fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError> {
+    fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError> {
         self.files
             .get(path)
             .cloned()
@@ -329,10 +306,13 @@ mod tests {
         });
 
         let fs = Arc::new(InMemoryFileSystem::new());
-        let result = render_template(template.to_string(), fs, data);
+        let result = render_template(template.to_string(), fs, &data);
 
         assert!(result.is_ok());
-        let pdf_bytes = result.unwrap();
+        let render_result = result.unwrap();
+        assert!(render_result.success);
+        assert!(render_result.pdf.is_some());
+        let pdf_bytes = render_result.pdf.unwrap();
         assert!(!pdf_bytes.is_empty());
         assert!(pdf_bytes.starts_with(b"%PDF"));
     }
@@ -353,37 +333,52 @@ mod tests {
         "#;
 
         let mut fs = InMemoryFileSystem::new();
-        fs.add_file("header.typ", header_template.as_bytes().to_vec());
+        fs.add_file("/header.typ", header_template.as_bytes().to_vec());
 
         let data = serde_json::json!({
             "title": "My Document",
             "content": "This is the content"
         });
 
-        let result = render_template(main_template.to_string(), Arc::new(fs), data);
+        let result = render_template(main_template.to_string(), Arc::new(fs), &data);
 
         assert!(result.is_ok());
-        let pdf_bytes = result.unwrap();
+        let render_result = result.unwrap();
+        assert!(
+            render_result.success,
+            "Render failed: {}",
+            render_result
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
+        assert!(render_result.pdf.is_some());
+        let pdf_bytes = render_result.pdf.unwrap();
         assert!(!pdf_bytes.is_empty());
         assert!(pdf_bytes.starts_with(b"%PDF"));
     }
 
     #[test]
     fn test_typst_world_creation() {
-        let world = TypstWorld::new("Hello".to_string(), "{}".to_string());
+        let world = PapermakeWorld::new("Hello".to_string(), "{}".to_string());
         assert!(format!("{:?}", world).contains("TypstWorld"));
     }
 
     #[test]
     fn test_typst_world_with_file_system() {
         let fs = Arc::new(InMemoryFileSystem::new());
-        let world = TypstWorld::with_file_system("Hello".to_string(), "{}".to_string(), fs);
+        let world = PapermakeWorld::with_file_system("Hello".to_string(), "{}".to_string(), fs);
         assert!(format!("{:?}", world).contains("has_file_system: true"));
     }
 
     #[test]
-    fn test_compile_error_display() {
-        let error = CompileError::TypstError("test error".to_string());
-        assert_eq!(format!("{}", error), "Typst compilation failed: test error");
+    fn test_error_display() {
+        use crate::error::{CompilationError, PapermakeError};
+        let error = PapermakeError::Compilation(CompilationError::TemplateCompilation {
+            message: "test error".to_string(),
+        });
+        assert!(format!("{}", error).contains("test error"));
     }
 }
