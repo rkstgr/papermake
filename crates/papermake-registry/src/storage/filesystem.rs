@@ -1,4 +1,4 @@
-use std::{sync::Arc};
+use std::sync::Arc;
 
 use papermake::{FileError, RenderFileSystem};
 
@@ -33,7 +33,7 @@ impl<S: BlobStorage> RegistryFileSystem<S> {
     fn normalize_path(&self, path: &str) -> String {
         // Remove leading slash if present
         let path = path.strip_prefix('/').unwrap_or(path);
-        
+
         path.to_string()
     }
 }
@@ -54,11 +54,9 @@ impl<S: BlobStorage + 'static> RenderFileSystem for RegistryFileSystem<S> {
         let blob_key = blob_key.clone();
         let handle = self.runtime.clone();
 
-        std::thread::spawn(move || {
-            handle.block_on(storage.get(&blob_key))
-        })
-        .join()
-        .map_err(|_| FileError::NotFound(path.into()))?
-        .map_err(|_| FileError::NotFound(path.into()))
+        std::thread::spawn(move || handle.block_on(storage.get(&blob_key)))
+            .join()
+            .map_err(|_| FileError::NotFound(path.into()))?
+            .map_err(|_| FileError::NotFound(path.into()))
     }
 }
