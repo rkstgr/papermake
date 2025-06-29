@@ -18,6 +18,23 @@ impl TemplateMetadata {
             author: author.into(),
         }
     }
+
+    /// Validate metadata fields
+    pub fn validate(&self) -> Result<(), TemplateValidationError> {
+        if self.name.trim().is_empty() {
+            return Err(TemplateValidationError::InvalidMetadata(
+                "Name cannot be empty".into(),
+            ));
+        }
+
+        if self.author.trim().is_empty() {
+            return Err(TemplateValidationError::InvalidMetadata(
+                "Author cannot be empty".into(),
+            ));
+        }
+
+        Ok(())
+    }
 }
 
 /// A complete template bundle containing the main template file, metadata, and assets
