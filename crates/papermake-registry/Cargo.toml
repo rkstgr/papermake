@@ -24,31 +24,15 @@ sha2 = "0.10"
 
 # Optional features for different storage backends
 tokio = { version = "1.0", features = ["fs"], optional = true }
-sqlx = { version = "0.7", features = [
-    "runtime-tokio-rustls",
-    "postgres",
-    "sqlite",
-    "uuid",
-    "time",
-], optional = true }
 
-# New storage backends
-tikv-client = { version = "0.3", optional = true }
+# Storage backends
 minio = { version = "0.3.0", optional = true }
 futures-util = { version = "0.3", optional = true }
 bytes = { version = "1.0", optional = true }
 
 [features]
-default = ["sqlite", "s3"]
-# Primary storage backends
-sqlite = ["sqlx", "tokio"]
+default = ["s3"]
 s3 = ["minio", "futures-util", "bytes", "tokio"]
-# Alternative storage backends
-tikv = ["tikv-client", "tokio"]
-postgres = ["sqlx", "tokio"]
-# Legacy storage backends  
-fs = ["tokio"]
-# Testing/development
 memory = []
 
 [dev-dependencies]

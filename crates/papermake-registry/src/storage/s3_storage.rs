@@ -1,11 +1,10 @@
-//! S3 file storage implementation
+//! S3-compatible storage implementation using MinIO client
 //!
-//! This module provides an S3-compatible storage implementation of the FileStorage trait.
-//! It works with AWS S3, MinIO, JuiceFS, and any S3-compatible object storage.
+//! This module provides an S3-compatible storage implementation of the BlobStorage trait.
+//! It works with AWS S3, MinIO, and any S3-compatible object storage.
 
-use super::FileStorage;
-use crate::{RegistryError, error::Result, template_ref::TemplateRef};
 use async_trait::async_trait;
+use bytes::Bytes;
 use futures_util::StreamExt;
 use minio::s3::{
     client::Client,
@@ -16,7 +15,9 @@ use minio::s3::{
 };
 use std::str::FromStr;
 
-/// S3-compatible file storage implementation using MinIO client
+use crate::{BlobStorage, storage::blob_storage::StorageError};
+
+/// S3-compatible storage implementation using MinIO client
 pub struct S3Storage {
     client: Client,
     bucket: String,
@@ -38,27 +39,27 @@ impl S3Storage {
     /// - S3_SECRET_ACCESS_KEY
     /// - S3_ENDPOINT_URL (for S3-compatible services like MinIO)
     /// - S3_BUCKET
-    /// - S3_REGION (optional, defaults to us-east-1)
-    pub async fn from_env() -> Result<Self> {
+    /// - S3_REGION (optional)
+    pub async fn from_env() -> Result<Self, StorageError> {
         let bucket = std::env::var("S3_BUCKET").map_err(|_| {
-            RegistryError::Storage("S3_BUCKET environment variable not set".to_string())
+            StorageError::Backend("S3_BUCKET environment variable not set".to_string())
         })?;
 
         let access_key = std::env::var("S3_ACCESS_KEY_ID").map_err(|_| {
-            RegistryError::Storage("S3_ACCESS_KEY_ID environment variable not set".to_string())
+            StorageError::Backend("S3_ACCESS_KEY_ID environment variable not set".to_string())
         })?;
 
         let secret_key = std::env::var("S3_SECRET_ACCESS_KEY").map_err(|_| {
-            RegistryError::Storage("S3_SECRET_ACCESS_KEY environment variable not set".to_string())
+            StorageError::Backend("S3_SECRET_ACCESS_KEY environment variable not set".to_string())
         })?;
 
         let endpoint_url = std::env::var("S3_ENDPOINT_URL").map_err(|_| {
-            RegistryError::Storage("S3_ENDPOINT_URL environment variable not set".to_string())
+            StorageError::Backend("S3_ENDPOINT_URL environment variable not set".to_string())
         })?;
 
         // Create base URL for endpoint
         let base_url = BaseUrl::from_str(&endpoint_url)
-            .map_err(|e| RegistryError::Storage(format!("Invalid S3_ENDPOINT_URL: {}", e)))?;
+            .map_err(|e| StorageError::Backend(format!("Invalid S3_ENDPOINT_URL: {}", e)))?;
 
         // Create credentials provider
         let creds_provider = StaticProvider::new(&access_key, &secret_key, None);
@@ -70,13 +71,13 @@ impl S3Storage {
             None, // Default region
             None, // No custom HTTP client
         )
-        .map_err(|e| RegistryError::Storage(format!("Failed to create S3 client: {}", e)))?;
+        .map_err(|e| StorageError::Backend(format!("Failed to create S3 client: {}", e)))?;
 
         Ok(Self::new(client, bucket))
     }
 
     /// Ensure bucket exists (create if it doesn't)
-    pub async fn ensure_bucket(&self) -> Result<()> {
+    pub async fn ensure_bucket(&self) -> Result<(), StorageError> {
         // Check if bucket exists
         match self.client.bucket_exists(&self.bucket).send().await {
             Ok(response) => {
@@ -86,71 +87,39 @@ impl S3Storage {
                     // Bucket doesn't exist, try to create it
                     match self.client.create_bucket(&self.bucket).send().await {
                         Ok(_) => Ok(()),
-                        Err(e) => Err(RegistryError::Storage(format!(
+                        Err(e) => Err(StorageError::Backend(format!(
                             "Failed to create bucket '{}': {}",
                             self.bucket, e
                         ))),
                     }
                 }
             }
-            Err(e) => Err(RegistryError::Storage(format!(
+            Err(e) => Err(StorageError::Backend(format!(
                 "Failed to check bucket '{}': {}",
                 self.bucket, e
             ))),
         }
     }
-}
 
-#[async_trait]
-impl FileStorage for S3Storage {
-    async fn put_file(&self, key: &str, content: &[u8]) -> Result<()> {
-        let bytes = bytes::Bytes::from(content.to_vec());
-        let segmented_bytes = SegmentedBytes::from(bytes);
-
-        self.client
-            .put_object(&self.bucket, key, segmented_bytes)
-            .send()
-            .await
-            .map_err(|e| RegistryError::Storage(format!("Failed to put file '{}': {}", key, e)))?;
-
-        Ok(())
-    }
-
-    async fn get_file(&self, key: &str) -> Result<Vec<u8>> {
-        let response = self
-            .client
-            .get_object(&self.bucket, key)
-            .send()
-            .await
-            .map_err(|e| RegistryError::Storage(format!("Failed to get file '{}': {}", key, e)))?;
-
-        let content = response.content.to_segmented_bytes().await.map_err(|e| {
-            RegistryError::Storage(format!("Failed to read file '{}' content: {}", key, e))
-        })?;
-
-        Ok(content.to_bytes().to_vec())
-    }
-
-    async fn file_exists(&self, key: &str) -> Result<bool> {
-        match self.client.stat_object(&self.bucket, key).send().await {
-            Ok(_) => Ok(true),
-            Err(_) => Ok(false), // Simplified error handling
+    /// Validate S3 key format
+    fn validate_key(&self, key: &str) -> Result<(), StorageError> {
+        if key.is_empty() || key.len() > 1024 {
+            return Err(StorageError::InvalidKey(
+                "Key must be between 1 and 1024 characters".into(),
+            ));
         }
-    }
 
-    async fn delete_file(&self, key: &str) -> Result<()> {
-        self.client
-            .delete_object(&self.bucket, key)
-            .send()
-            .await
-            .map_err(|e| {
-                RegistryError::Storage(format!("Failed to delete file '{}': {}", key, e))
-            })?;
+        if key.starts_with('/') || key.ends_with('/') {
+            return Err(StorageError::InvalidKey(
+                "Key cannot start or end with '/'".into(),
+            ));
+        }
 
         Ok(())
     }
 
-    async fn list_files(&self, prefix: &str) -> Result<Vec<String>> {
+    /// List files with a given prefix
+    pub async fn list_files(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
         let mut keys = Vec::new();
         let mut stream = self
             .client
@@ -166,7 +135,7 @@ impl FileStorage for S3Storage {
                     keys.push(item.name);
                 }
                 Err(e) => {
-                    return Err(RegistryError::Storage(format!(
+                    return Err(StorageError::Backend(format!(
                         "Failed to list files with prefix '{}': {}",
                         prefix, e
                     )));
@@ -176,110 +145,117 @@ impl FileStorage for S3Storage {
 
         Ok(keys)
     }
+}
 
-    async fn save_template_content(&self, template_ref: &TemplateRef, content: &str) -> Result<String> {
-        let key = Self::template_content_key(template_ref);
-        self.put_file(&key, content.as_bytes()).await?;
-        Ok(key)
+#[async_trait]
+impl BlobStorage for S3Storage {
+    async fn put(&self, key: &str, data: Vec<u8>) -> Result<(), StorageError> {
+        self.validate_key(key)?;
+
+        let bytes = SegmentedBytes::from(Bytes::from(data));
+
+        self.client
+            .put_object(&self.bucket, key, bytes)
+            .send()
+            .await
+            .map_err(|e| StorageError::Backend(format!("Failed to put file '{}': {}", key, e)))?;
+
+        Ok(())
     }
 
-    async fn save_template_schema(&self, template_ref: &TemplateRef, schema: &papermake::Schema) -> Result<String> {
-        let key = Self::template_schema_key(template_ref);
-        let schema_json = serde_json::to_string_pretty(schema)
-            .map_err(|e| RegistryError::Storage(format!("Failed to serialize schema: {}", e)))?;
-        self.put_file(&key, schema_json.as_bytes()).await?;
-        Ok(key)
+    async fn get(&self, key: &str) -> Result<Vec<u8>, StorageError> {
+        self.validate_key(key)?;
+
+        let response = self
+            .client
+            .get_object(&self.bucket, key)
+            .send()
+            .await
+            .map_err(|e| {
+                // Check if it's a not found error
+                if e.to_string().contains("NoSuchKey") || e.to_string().contains("404") {
+                    StorageError::NotFound(key.to_string())
+                } else {
+                    StorageError::Backend(format!("Failed to get file '{}': {}", key, e))
+                }
+            })?;
+
+        let content = response.content.to_segmented_bytes().await.map_err(|e| {
+            StorageError::Backend(format!("Failed to read file '{}' content: {}", key, e))
+        })?;
+
+        Ok(content.to_bytes().to_vec())
     }
 
-    async fn get_template_content(&self, s3_key: &str) -> Result<String> {
-        let bytes = self.get_file(s3_key).await?;
-        String::from_utf8(bytes)
-            .map_err(|e| RegistryError::Storage(format!("Template content is not valid UTF-8: {}", e)))
-    }
+    async fn exists(&self, key: &str) -> Result<bool, StorageError> {
+        self.validate_key(key)?;
 
-    async fn get_template_schema(&self, s3_key: &str) -> Result<papermake::Schema> {
-        let bytes = self.get_file(s3_key).await?;
-        let schema_json = String::from_utf8(bytes)
-            .map_err(|e| RegistryError::Storage(format!("Schema file is not valid UTF-8: {}", e)))?;
-        serde_json::from_str(&schema_json)
-            .map_err(|e| RegistryError::Storage(format!("Failed to deserialize schema: {}", e)))
-    }
-
-    async fn delete_template_files(&self, content_key: &str, schema_key: &str) -> Result<()> {
-        // Delete content file
-        if let Err(e) = self.delete_file(content_key).await {
-            eprintln!("Warning: Failed to delete content file {}: {}", content_key, e);
+        match self.client.stat_object(&self.bucket, key).send().await {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                // Check if it's a not found error
+                if e.to_string().contains("NoSuchKey") || e.to_string().contains("404") {
+                    Ok(false)
+                } else {
+                    Err(StorageError::Backend(format!(
+                        "Failed to check existence of file '{}': {}",
+                        key, e
+                    )))
+                }
+            }
         }
-        
-        // Delete schema file
-        if let Err(e) = self.delete_file(schema_key).await {
-            eprintln!("Warning: Failed to delete schema file {}: {}", schema_key, e);
-        }
-        
+    }
+
+    async fn delete(&self, key: &str) -> Result<(), StorageError> {
+        self.validate_key(key)?;
+
+        self.client
+            .delete_object(&self.bucket, key)
+            .send()
+            .await
+            .map_err(|e| {
+                StorageError::Backend(format!("Failed to delete file '{}': {}", key, e))
+            })?;
+
         Ok(())
     }
 }
 
+/// Utility functions for generating S3 keys for different types of content
 impl S3Storage {
-    /// Generate S3 key for template content (Typst markup)
-    pub fn template_content_key(template_ref: &TemplateRef) -> String {
-        match &template_ref.org {
-            Some(org) => format!("templates/{}/{}/{}/content.typ", org, template_ref.name, template_ref.tag),
-            None => format!("templates/{}/{}/content.typ", template_ref.name, template_ref.tag),
-        }
+    /// Generate key for content-addressable blob storage
+    pub fn blob_key(hash: &str) -> String {
+        format!("blobs/sha256/{}", hash)
     }
 
-    /// Generate S3 key for template schema (JSON)
-    pub fn template_schema_key(template_ref: &TemplateRef) -> String {
-        match &template_ref.org {
-            Some(org) => format!("templates/{}/{}/{}/schema.json", org, template_ref.name, template_ref.tag),
-            None => format!("templates/{}/{}/schema.json", template_ref.name, template_ref.tag),
-        }
+    /// Generate key for manifest storage
+    pub fn manifest_key(hash: &str) -> String {
+        format!("manifests/sha256/{}", hash)
     }
 
-    /// Generate S3 key for template source file using Docker-style TemplateRef
-    pub fn template_source_key(template_ref: &TemplateRef) -> String {
-        match &template_ref.org {
-            Some(org) => format!("templates/{}/{}/{}/source.typ", org, template_ref.name, template_ref.tag),
-            None => format!("templates/{}/{}/source.typ", template_ref.name, template_ref.tag),
-        }
+    /// Generate key for mutable reference storage
+    pub fn ref_key(namespace: &str, tag: &str) -> String {
+        format!("refs/{}/{}", namespace, tag)
     }
 
-    /// Generate S3 key for template asset using Docker-style TemplateRef
-    /// Assets are stored without version to enable reuse across template versions
-    pub fn template_asset_key(template_ref: &TemplateRef, asset_path: &str) -> String {
-        match &template_ref.org {
-            Some(org) => format!("templates/{}/{}/assets/{}", org, template_ref.name, asset_path),
-            None => format!("templates/{}/assets/{}", template_ref.name, asset_path),
-        }
+    /// Generate key prefix for listing templates in a namespace
+    pub fn namespace_prefix(namespace: &str) -> String {
+        format!("refs/{}/", namespace)
     }
 
-    /// Generate S3 key for rendered PDF
-    pub fn render_pdf_key(job_id: &str) -> String {
-        format!("renders/{}.pdf", job_id)
+    /// Generate key prefix for listing all references
+    pub fn refs_prefix() -> String {
+        "refs/".to_string()
     }
 
-    /// Generate S3 key prefix for template files using Docker-style TemplateRef
-    pub fn template_prefix(template_ref: &TemplateRef) -> String {
-        match &template_ref.org {
-            Some(org) => format!("templates/{}/{}/", org, template_ref.name),
-            None => format!("templates/{}/", template_ref.name),
-        }
+    /// Generate key prefix for listing all blobs
+    pub fn blobs_prefix() -> String {
+        "blobs/".to_string()
     }
 
-    /// Generate S3 key prefix for all renders
-    pub fn renders_prefix() -> String {
-        "renders/".to_string()
-    }
-
-    /// Generate S3 key prefix for organization templates
-    pub fn org_templates_prefix(org: &str) -> String {
-        format!("templates/{}/", org)
-    }
-
-    /// Generate S3 key prefix for all templates (no org)
-    pub fn all_templates_prefix() -> String {
-        "templates/".to_string()
+    /// Generate key prefix for listing all manifests
+    pub fn manifests_prefix() -> String {
+        "manifests/".to_string()
     }
 }
 
@@ -288,90 +264,75 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_key_generation_without_org() {
-        let template_ref = TemplateRef::new("my-template").with_tag("v1");
+    fn test_key_generation() {
+        assert_eq!(S3Storage::blob_key("abc123"), "blobs/sha256/abc123");
+
+        assert_eq!(S3Storage::manifest_key("def456"), "manifests/sha256/def456");
 
         assert_eq!(
-            S3Storage::template_content_key(&template_ref),
-            "templates/my-template/v1/content.typ"
+            S3Storage::ref_key("john/invoice", "latest"),
+            "refs/john/invoice/latest"
         );
 
         assert_eq!(
-            S3Storage::template_schema_key(&template_ref),
-            "templates/my-template/v1/schema.json"
-        );
-
-        assert_eq!(
-            S3Storage::template_source_key(&template_ref),
-            "templates/my-template/v1/source.typ"
-        );
-
-        assert_eq!(
-            S3Storage::template_asset_key(&template_ref, "fonts/Arial.ttf"),
-            "templates/my-template/assets/fonts/Arial.ttf"
-        );
-
-        assert_eq!(
-            S3Storage::template_prefix(&template_ref),
-            "templates/my-template/"
+            S3Storage::ref_key("invoice", "v1.0.0"),
+            "refs/invoice/v1.0.0"
         );
     }
 
     #[test]
-    fn test_key_generation_with_org() {
-        let template_ref = TemplateRef::with_org("mycompany", "invoice").with_tag("v2");
-
+    fn test_prefix_generation() {
         assert_eq!(
-            S3Storage::template_content_key(&template_ref),
-            "templates/mycompany/invoice/v2/content.typ"
+            S3Storage::namespace_prefix("john/invoice"),
+            "refs/john/invoice/"
         );
 
-        assert_eq!(
-            S3Storage::template_schema_key(&template_ref),
-            "templates/mycompany/invoice/v2/schema.json"
-        );
-
-        assert_eq!(
-            S3Storage::template_source_key(&template_ref),
-            "templates/mycompany/invoice/v2/source.typ"
-        );
-
-        assert_eq!(
-            S3Storage::template_asset_key(&template_ref, "fonts/Arial.ttf"),
-            "templates/mycompany/invoice/assets/fonts/Arial.ttf"
-        );
-
-        assert_eq!(
-            S3Storage::template_prefix(&template_ref),
-            "templates/mycompany/invoice/"
-        );
+        assert_eq!(S3Storage::refs_prefix(), "refs/");
+        assert_eq!(S3Storage::blobs_prefix(), "blobs/");
+        assert_eq!(S3Storage::manifests_prefix(), "manifests/");
     }
 
     #[test]
-    fn test_render_and_prefix_keys() {
-        assert_eq!(S3Storage::render_pdf_key("job-123"), "renders/job-123.pdf");
-        assert_eq!(S3Storage::renders_prefix(), "renders/");
-        assert_eq!(S3Storage::org_templates_prefix("mycompany"), "templates/mycompany/");
-        assert_eq!(S3Storage::all_templates_prefix(), "templates/");
+    fn test_key_validation() {
+        let client = minio::s3::client::Client::new(
+            BaseUrl::from_str("http://localhost:9000").unwrap(),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        let storage = S3Storage::new(client, "test-bucket");
+
+        // Valid keys
+        assert!(storage.validate_key("valid/key.txt").is_ok());
+        assert!(storage.validate_key("blobs/sha256/abc123").is_ok());
+        assert!(storage.validate_key("refs/john/invoice/latest").is_ok());
+
+        // Invalid keys
+        assert!(storage.validate_key("").is_err());
+        assert!(storage.validate_key("/starts-with-slash").is_err());
+        assert!(storage.validate_key("ends-with-slash/").is_err());
+        assert!(storage.validate_key(&"x".repeat(1025)).is_err());
     }
 
-    #[test]
-    fn test_latest_tag() {
-        let template_ref = TemplateRef::new("my-template"); // defaults to "latest"
+    #[tokio::test]
+    async fn test_s3_storage_from_env_missing_vars() {
+        // Clear environment variables to test error handling
+        unsafe {
+            std::env::remove_var("S3_BUCKET");
+            std::env::remove_var("S3_ACCESS_KEY_ID");
+            std::env::remove_var("S3_SECRET_ACCESS_KEY");
+            std::env::remove_var("S3_ENDPOINT_URL");
+        }
 
-        assert_eq!(
-            S3Storage::template_source_key(&template_ref),
-            "templates/my-template/latest/source.typ"
-        );
-    }
+        let result = S3Storage::from_env().await;
+        assert!(result.is_err());
 
-    #[test]
-    fn test_draft_tag() {
-        let template_ref = TemplateRef::new("my-template").with_tag("draft");
-
-        assert_eq!(
-            S3Storage::template_source_key(&template_ref),
-            "templates/my-template/draft/source.typ"
-        );
+        match result {
+            Err(StorageError::Backend(msg)) => {
+                assert!(msg.contains("S3_BUCKET"));
+            }
+            _ => panic!("Expected Backend error for missing S3_BUCKET"),
+        }
     }
 }

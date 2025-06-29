@@ -53,32 +53,11 @@
 //! # }
 //! ```
 
-pub mod entities;
-pub mod error;
-pub mod registry;
+pub mod address;
+pub mod bundle;
 pub mod storage;
-pub mod template_ref;
 
-pub use entities::*;
-pub use error::*;
-pub use registry::*;
-pub use storage::{MetadataStorage, FileStorage, TypstFileSystem};
-pub use template_ref::*;
-
-#[cfg(feature = "sqlite")]
-pub use storage::sqlite_storage::SqliteStorage;
-
-#[cfg(feature = "tikv")]
-pub use storage::tikv_storage::TiKVStorage;
+pub use storage::{BlobStorage, TypstFileSystem};
 
 #[cfg(feature = "s3")]
 pub use storage::s3_storage::S3Storage;
-
-pub use storage::registry_filesystem::RegistryFileSystem;
-
-// Legacy exports
-#[cfg(feature = "fs")]
-pub use storage::file_storage::FileSystemStorage;
-
-// Re-export commonly used papermake types
-pub use papermake::{RenderOptions, RenderResult, Template, TemplateBuilder};
