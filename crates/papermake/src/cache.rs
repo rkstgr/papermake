@@ -37,7 +37,7 @@ impl CachedTemplate {
             None => {
                 // Create new world and cache it
                 let mut new_world = TypstWorld::new(
-                    self.template.content.clone(),
+                    self.template.main_typ.clone(),
                     serde_json::to_string(data)
                         .map_err(|e| PapermakeError::Rendering(e.to_string()))?,
                 );

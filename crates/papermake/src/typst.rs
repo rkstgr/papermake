@@ -46,10 +46,26 @@ pub trait TypstFileSystem: Send + Sync {
     async fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError>;
 }
 
+/// Errors that can occur during template compilation
+#[derive(Debug, thiserror::Error)]
+pub enum CompileError {
+    #[error("Typst compilation failed: {0}")]
+    TypstError(String),
+
+    #[error("Data serialization failed: {0}")]
+    DataSerialization(#[from] serde_json::Error),
+
+    #[error("File system error: {0}")]
+    FileSystem(String),
+
+    #[error("Invalid UTF-8 content: {0}")]
+    InvalidUtf8(#[from] std::string::FromUtf8Error),
+}
+
 /// Main interface that determines the environment for Typst.
 pub struct TypstWorld {
     /// The content of a source.
-    pub source: Source,
+    source: Source,
 
     /// The standard library.
     library: LazyHash<Library>,
@@ -93,6 +109,7 @@ impl std::fmt::Debug for TypstWorld {
 }
 
 impl TypstWorld {
+    /// Create a new TypstWorld with the given template content and data
     pub fn new(template_content: String, data: String) -> Self {
         // Use the cached fonts directly
         let (book, fonts) = CACHED_FONTS.clone();
@@ -101,7 +118,7 @@ impl TypstWorld {
         inputs_dict.insert("data".into(), data.as_str().into_value());
 
         let library = Library::builder().with_inputs(inputs_dict).build();
-        
+
         let source_text = format!(
             "#let data = json.decode(sys.inputs.data)\n{}",
             template_content
@@ -110,7 +127,7 @@ impl TypstWorld {
         Self {
             library: LazyHash::new(library),
             book: LazyHash::new(book),
-            fonts, // Use the cached fonts
+            fonts,
             source: Source::detached(source_text),
             time: time::OffsetDateTime::now_utc(),
             cache_directory: std::env::var_os("CACHE_DIRECTORY")
@@ -121,7 +138,7 @@ impl TypstWorld {
         }
     }
 
-    /// Create TypstWorld with file system support
+    /// Create TypstWorld with file system support for resolving imports
     pub fn with_file_system(
         template_content: String,
         data: String,
@@ -132,13 +149,13 @@ impl TypstWorld {
         world
     }
 
-    pub fn update_data(&mut self, data: String) -> Result<(), String> {
+    /// Update the data available to the template
+    pub fn update_data(&mut self, data: String) -> Result<(), CompileError> {
         // Update the data in the inputs dictionary
         let mut inputs_dict = Dict::new();
         inputs_dict.insert("data".into(), data.as_str().into_value());
 
         // Create a new library with updated inputs
-        // Note: This is not optimal - ideally we'd modify the existing library
         let library = Library::builder().with_inputs(inputs_dict).build();
         self.library = LazyHash::new(library);
 
@@ -154,7 +171,6 @@ struct FileEntry {
 }
 
 impl FileEntry {
-    #[allow(dead_code)]
     fn new(bytes: Vec<u8>, source: Option<Source>) -> Self {
         Self {
             bytes: Bytes::new(bytes),
@@ -187,12 +203,9 @@ impl TypstWorld {
 
         // If we have a file system, try to resolve the file
         if let Some(fs) = &self.file_system {
-            // Convert FileId to path - this is a simplified implementation
-            // In practice, you'd need more sophisticated path resolution
             let path = self.id_to_path(id)?;
 
             // Use tokio runtime to block on async call
-            // This is not ideal but necessary since typst::World::file is sync
             let rt = tokio::runtime::Handle::try_current()
                 .map_err(|_| FileError::Other(Some("No tokio runtime available".into())))?;
 
@@ -205,17 +218,13 @@ impl TypstWorld {
             return Ok(entry);
         }
 
-        eprintln!("accessing file id: {id:?}");
-        Err(FileError::AccessDenied)
+        Err(FileError::NotFound(format!("{:?}", id).into()))
     }
 
     /// Convert FileId to file path
-    /// This is a simplified implementation - in practice you'd need more sophisticated mapping
     fn id_to_path(&self, id: FileId) -> FileResult<String> {
-        // For now, just use the file ID's debug representation as the path
-        // This would need to be improved based on how Typst resolves imports
+        // Extract the actual path from FileId
         let id_str = format!("{:?}", id);
-        // Remove quotes and extract the actual path if it exists
         if id_str.starts_with("FileId(") && id_str.ends_with(")") {
             let path = &id_str[7..id_str.len() - 1];
             if path.starts_with("\"") && path.ends_with("\"") {
@@ -228,8 +237,6 @@ impl TypstWorld {
 }
 
 /// This is the interface we have to implement such that `typst` can compile it.
-///
-/// I have tried to keep it as minimal as possible
 impl typst::World for TypstWorld {
     /// Standard library.
     fn library(&self) -> &LazyHash<Library> {
@@ -273,5 +280,110 @@ impl typst::World for TypstWorld {
         let offset = time::UtcOffset::from_hms(offset.try_into().ok()?, 0, 0).ok()?;
         let time = self.time.checked_to_offset(offset)?;
         Some(Datetime::Date(time.date()))
+    }
+}
+
+/// Simple in-memory file system implementation for testing
+pub struct InMemoryFileSystem {
+    files: HashMap<String, Vec<u8>>,
+}
+
+impl InMemoryFileSystem {
+    pub fn new() -> Self {
+        Self {
+            files: HashMap::new(),
+        }
+    }
+
+    pub fn add_file<P: AsRef<str>>(&mut self, path: P, content: Vec<u8>) {
+        self.files.insert(path.as_ref().to_string(), content);
+    }
+}
+
+#[async_trait]
+impl TypstFileSystem for InMemoryFileSystem {
+    async fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError> {
+        self.files
+            .get(path)
+            .cloned()
+            .ok_or_else(|| FileError::NotFound(path.into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::render::render_template;
+
+    use super::*;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_simple_template_rendering() {
+        let template = r#"
+            #set page(width: 200pt, height: 100pt)
+            Hello #data.name!
+        "#;
+
+        let data = serde_json::json!({
+            "name": "World"
+        });
+
+        let fs = Arc::new(InMemoryFileSystem::new());
+        let result = render_template(template.to_string(), fs, data);
+
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[tokio::test]
+    async fn test_template_with_imports() {
+        let main_template = r#"
+            #import "header.typ": make_header
+            #set page(width: 200pt, height: 100pt)
+            #make_header(data.title)
+            Content: #data.content
+        "#;
+
+        let header_template = r#"
+            #let make_header(title) = [
+                = #title
+            ]
+        "#;
+
+        let mut fs = InMemoryFileSystem::new();
+        fs.add_file("header.typ", header_template.as_bytes().to_vec());
+
+        let data = serde_json::json!({
+            "title": "My Document",
+            "content": "This is the content"
+        });
+
+        let result = render_template(main_template.to_string(), Arc::new(fs), data);
+
+        assert!(result.is_ok());
+        let pdf_bytes = result.unwrap();
+        assert!(!pdf_bytes.is_empty());
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[test]
+    fn test_typst_world_creation() {
+        let world = TypstWorld::new("Hello".to_string(), "{}".to_string());
+        assert!(format!("{:?}", world).contains("TypstWorld"));
+    }
+
+    #[test]
+    fn test_typst_world_with_file_system() {
+        let fs = Arc::new(InMemoryFileSystem::new());
+        let world = TypstWorld::with_file_system("Hello".to_string(), "{}".to_string(), fs);
+        assert!(format!("{:?}", world).contains("has_file_system: true"));
+    }
+
+    #[test]
+    fn test_compile_error_display() {
+        let error = CompileError::TypstError("test error".to_string());
+        assert_eq!(format!("{}", error), "Typst compilation failed: test error");
     }
 }

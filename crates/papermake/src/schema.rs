@@ -1,6 +1,6 @@
 //! Schema definition for templates
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{PapermakeError, Result};
 
@@ -39,111 +39,123 @@ impl Schema {
     pub fn new() -> Self {
         Schema { fields: Vec::new() }
     }
-    
+
     /// Create a schema from a JSON value
     pub fn from_value(value: serde_json::Value) -> Self {
         // Simple implementation - in production you'd want proper parsing
         match value {
             serde_json::Value::Null => Schema::default(),
             _ => {
-                // Try to deserialize as Schema, fallback to empty schema
+                // Try to deserialize as Schema, fallback to empty schema, TODO: should throw an error or warning
                 serde_json::from_value(value).unwrap_or_default()
             }
         }
     }
-    
+
     /// Create a new schema builder
     pub fn builder() -> SchemaBuilder {
         SchemaBuilder::new()
     }
-    
+
     /// Add a field to the schema
     pub fn add_field(&mut self, field: SchemaField) -> &mut Self {
         self.fields.push(field);
         self
     }
-    
+
     /// Validate that provided data matches this schema
     pub fn validate(&self, data: &serde_json::Value) -> Result<()> {
         if !data.is_object() {
             return Err(PapermakeError::SchemaValidation(
-                "Root data must be an object".to_string()
+                "Root data must be an object".to_string(),
             ));
         }
-        
+
         let data_obj = data.as_object().unwrap();
-        
+
         for field in &self.fields {
             if field.required && !data_obj.contains_key(&field.key) {
-                return Err(PapermakeError::SchemaValidation(
-                    format!("Required field '{}' is missing", field.key)
-                ));
+                return Err(PapermakeError::SchemaValidation(format!(
+                    "Required field '{}' is missing",
+                    field.key
+                )));
             }
-            
+
             if let Some(value) = data_obj.get(&field.key) {
                 self.validate_field_type(&field.field_type, value, &field.key)?;
             }
         }
-        
+
         Ok(())
     }
-    
+
     // Validate that a value matches the expected type
-    fn validate_field_type(&self, field_type: &FieldType, value: &serde_json::Value, path: &str) -> Result<()> {
+    fn validate_field_type(
+        &self,
+        field_type: &FieldType,
+        value: &serde_json::Value,
+        path: &str,
+    ) -> Result<()> {
         match field_type {
             FieldType::String => {
                 if !value.is_string() {
-                    return Err(PapermakeError::SchemaValidation(
-                        format!("Field '{}' must be a string", path)
-                    ));
+                    return Err(PapermakeError::SchemaValidation(format!(
+                        "Field '{}' must be a string",
+                        path
+                    )));
                 }
-            },
+            }
             FieldType::Number => {
                 if !value.is_number() {
-                    return Err(PapermakeError::SchemaValidation(
-                        format!("Field '{}' must be a number", path)
-                    ));
+                    return Err(PapermakeError::SchemaValidation(format!(
+                        "Field '{}' must be a number",
+                        path
+                    )));
                 }
-            },
+            }
             FieldType::Boolean => {
                 if !value.is_boolean() {
-                    return Err(PapermakeError::SchemaValidation(
-                        format!("Field '{}' must be a boolean", path)
-                    ));
+                    return Err(PapermakeError::SchemaValidation(format!(
+                        "Field '{}' must be a boolean",
+                        path
+                    )));
                 }
-            },
+            }
             FieldType::Date => {
                 // Simple validation - just check if it's a string for now
                 // In a real implementation, you'd parse and validate the date format
                 if !value.is_string() {
-                    return Err(PapermakeError::SchemaValidation(
-                        format!("Field '{}' must be a date string", path)
-                    ));
+                    return Err(PapermakeError::SchemaValidation(format!(
+                        "Field '{}' must be a date string",
+                        path
+                    )));
                 }
-            },
+            }
             FieldType::Object(sub_schema) => {
                 if !value.is_object() {
-                    return Err(PapermakeError::SchemaValidation(
-                        format!("Field '{}' must be an object", path)
-                    ));
+                    return Err(PapermakeError::SchemaValidation(format!(
+                        "Field '{}' must be an object",
+                        path
+                    )));
                 }
-                
+
                 sub_schema.validate(value)?;
-            },
+            }
             FieldType::Array(item_type) => {
                 if !value.is_array() {
-                    return Err(PapermakeError::SchemaValidation(
-                        format!("Field '{}' must be an array", path)
-                    ));
+                    return Err(PapermakeError::SchemaValidation(format!(
+                        "Field '{}' must be an array",
+                        path
+                    )));
                 }
-                
+
                 let array = value.as_array().unwrap();
                 for (i, item) in array.iter().enumerate() {
                     self.validate_field_type(item_type, item, &format!("{}[{}]", path, i))?;
                 }
-            },
+            }
         }
-        
+
         Ok(())
     }
 }
@@ -159,7 +171,7 @@ impl SchemaBuilder {
     pub fn new() -> Self {
         SchemaBuilder { fields: Vec::new() }
     }
-    
+
     /// Add a required field
     pub fn field(mut self, key: impl Into<String>, field_type: FieldType) -> Self {
         self.fields.push(SchemaField {
@@ -172,9 +184,14 @@ impl SchemaBuilder {
         });
         self
     }
-    
+
     /// Add a required field with label
-    pub fn field_with_label(mut self, key: impl Into<String>, label: impl Into<String>, field_type: FieldType) -> Self {
+    pub fn field_with_label(
+        mut self,
+        key: impl Into<String>,
+        label: impl Into<String>,
+        field_type: FieldType,
+    ) -> Self {
         self.fields.push(SchemaField {
             key: key.into(),
             label: Some(label.into()),
@@ -185,12 +202,12 @@ impl SchemaBuilder {
         });
         self
     }
-    
+
     /// Add a required field (alias for field)
     pub fn required(self, key: impl Into<String>, field_type: FieldType) -> Self {
         self.field(key, field_type)
     }
-    
+
     /// Add an optional field
     pub fn optional(mut self, key: impl Into<String>, field_type: FieldType) -> Self {
         self.fields.push(SchemaField {
@@ -203,9 +220,14 @@ impl SchemaBuilder {
         });
         self
     }
-    
+
     /// Add an optional field with default value
-    pub fn optional_with_default(mut self, key: impl Into<String>, field_type: FieldType, default: serde_json::Value) -> Self {
+    pub fn optional_with_default(
+        mut self,
+        key: impl Into<String>,
+        field_type: FieldType,
+        default: serde_json::Value,
+    ) -> Self {
         self.fields.push(SchemaField {
             key: key.into(),
             label: None,
@@ -216,9 +238,14 @@ impl SchemaBuilder {
         });
         self
     }
-    
+
     /// Add a field with description
-    pub fn field_with_description(mut self, key: impl Into<String>, field_type: FieldType, description: impl Into<String>) -> Self {
+    pub fn field_with_description(
+        mut self,
+        key: impl Into<String>,
+        field_type: FieldType,
+        description: impl Into<String>,
+    ) -> Self {
         self.fields.push(SchemaField {
             key: key.into(),
             label: None,
@@ -229,9 +256,11 @@ impl SchemaBuilder {
         });
         self
     }
-    
+
     /// Build the schema
     pub fn build(self) -> Schema {
-        Schema { fields: self.fields }
+        Schema {
+            fields: self.fields,
+        }
     }
 }
