@@ -242,7 +242,7 @@ impl<S: BlobStorage + 'static> Registry<S> {
         // Step 5: Render the template using papermake
         let render_result =
             papermake::render_template(entrypoint_content, Arc::new(file_system), data)
-                .map_err(|e| RegistryError::Compilation(e))?;
+                .map_err(RegistryError::Compilation)?;
 
         // Check if rendering was successful
         if render_result.success {
