@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc};
 
 use papermake::{FileError, RenderFileSystem};
 
@@ -38,7 +38,7 @@ impl<S: BlobStorage> RegistryFileSystem<S> {
     }
 }
 
-impl<S: BlobStorage> RenderFileSystem for RegistryFileSystem<S> {
+impl<S: BlobStorage + 'static> RenderFileSystem for RegistryFileSystem<S> {
     fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError> {
         let normalized_path = self.normalize_path(path);
 
@@ -50,9 +50,15 @@ impl<S: BlobStorage> RenderFileSystem for RegistryFileSystem<S> {
 
         let blob_key = ContentAddress::blob_key(file_hash);
 
-        // Block on async call
-        self.runtime
-            .block_on(self.storage.get(&blob_key))
-            .map_err(|_| FileError::NotFound(path.into()))
+        let storage = self.storage.clone(); // Ensure storage is cloneable or use Arc
+        let blob_key = blob_key.clone();
+        let handle = self.runtime.clone();
+
+        std::thread::spawn(move || {
+            handle.block_on(storage.get(&blob_key))
+        })
+        .join()
+        .map_err(|_| FileError::NotFound(path.into()))?
+        .map_err(|_| FileError::NotFound(path.into()))
     }
 }
