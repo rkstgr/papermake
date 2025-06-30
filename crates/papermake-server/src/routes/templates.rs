@@ -41,6 +41,17 @@ pub struct PublishResponse {
     pub reference: String,
 }
 
+/// Simplified request for publishing a template with JSON payload
+#[derive(Debug, Deserialize)]
+pub struct PublishSimpleRequest {
+    /// Main template file content (UTF-8 string)
+    pub main_typ: String,
+    /// Optional JSON schema as object
+    pub schema: Option<serde_json::Value>,
+    /// Template metadata
+    pub metadata: TemplateMetadata,
+}
+
 /// Template metadata response for API
 #[derive(Debug, Serialize)]
 pub struct TemplateMetadataResponse {
@@ -65,6 +76,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(list_templates))
         .route("/{name}/publish", post(publish_template))
+        .route("/{name}/publish-simple", post(publish_template_simple))
         .route("/{name}/tags", get(list_template_tags))
         .route("/{reference}", get(get_template_metadata))
 }
@@ -83,15 +95,17 @@ pub async fn list_templates(
     let templates = state.registry.list_templates().await?;
 
     // Apply search filter if provided
-    let filtered_templates: Vec<TemplateInfo> = if let Some(search_term) = &query.search {
-        let search_lower = search_term.to_lowercase();
-        templates
-            .into_iter()
-            .filter(|template| template.full_name().to_lowercase().contains(&search_lower))
-            .collect()
-    } else {
-        templates
-    };
+    // let filtered_templates: Vec<TemplateInfo> = if let Some(search_term) = &query.search {
+    //     let search_lower = search_term.to_lowercase();
+    //     templates
+    //         .into_iter()
+    //         .filter(|template| template.full_name().to_lowercase().contains(&search_lower))
+    //         .collect()
+    // } else {
+    //     templates
+    // };
+
+    let filtered_templates = templates;
 
     // Apply pagination
     let total = filtered_templates.len() as u32;
@@ -190,6 +204,57 @@ pub async fn publish_template(
     // Add additional files
     for (filename, file_data) in files {
         bundle = bundle.add_file(filename, file_data);
+    }
+
+    // Validate bundle before publishing
+    bundle
+        .validate()
+        .map_err(|e| ApiError::bad_request(&format!("Template validation failed: {}", e)))?;
+
+    // Publish the template
+    let manifest_hash = state.registry.publish(bundle, &name, &params.tag).await?;
+
+    let reference = format!("{}:{}", name, params.tag);
+    let response_data = PublishResponse {
+        message: format!("Template '{}' published successfully", reference),
+        manifest_hash,
+        reference: reference.clone(),
+    };
+
+    Ok(Json(ApiResponse::with_message(
+        response_data,
+        format!("Template published with reference '{}'", reference),
+    )))
+}
+
+/// Publish a template with simplified JSON payload (no multipart)
+///
+/// POST /api/templates/{name}/publish-simple?tag=latest
+/// Content-Type: application/json
+///
+/// JSON body:
+/// {
+///   "main_typ": "template content as string",
+///   "schema": { "optional": "json schema object" },
+///   "metadata": { "name": "template name", "author": "author email" }
+/// }
+pub async fn publish_template_simple(
+    State(state): State<AppState>,
+    Path(name): Path<String>,
+    Query(params): Query<PublishParams>,
+    Json(request): Json<PublishSimpleRequest>,
+) -> Result<Json<ApiResponse<PublishResponse>>> {
+    // Convert main_typ string to bytes
+    let main_typ = request.main_typ.into_bytes();
+
+    // Create template bundle
+    let mut bundle = TemplateBundle::new(main_typ, request.metadata);
+
+    // Add schema if provided
+    if let Some(schema_value) = request.schema {
+        let schema_bytes = serde_json::to_vec(&schema_value)
+            .map_err(|e| ApiError::bad_request(&format!("Failed to serialize schema: {}", e)))?;
+        bundle = bundle.with_schema(schema_bytes);
     }
 
     // Validate bundle before publishing
