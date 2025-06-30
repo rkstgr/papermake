@@ -131,8 +131,11 @@ impl S3Storage {
 
         while let Some(result) = stream.next().await {
             match result {
-                Ok(item) => {
-                    keys.push(item.name);
+                Ok(response) => {
+                    // Collect keys from the response
+                    for entry in response.contents {
+                        keys.push(entry.name);
+                    }
                 }
                 Err(e) => {
                     return Err(StorageError::Backend(format!(

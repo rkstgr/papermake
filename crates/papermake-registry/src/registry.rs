@@ -310,11 +310,13 @@ impl<S: BlobStorage + 'static> Registry<S> {
             // Parse reference key: "refs/{namespace}/{tag}" or "refs/{namespace}/{name}/{tag}"
             if let Some(parsed) = Self::parse_ref_key(&ref_key) {
                 let (namespace_path, tag) = parsed;
-                
+
                 // Add this tag to the template's tag list
-                let entry = templates_map.entry(namespace_path.clone()).or_insert((Vec::new(), None));
+                let entry = templates_map
+                    .entry(namespace_path.clone())
+                    .or_insert((Vec::new(), None));
                 entry.0.push(tag.clone());
-                
+
                 // If this is the "latest" tag, remember it for getting metadata
                 if tag == "latest" {
                     entry.1 = Some(ref_key.clone());
@@ -331,7 +333,11 @@ impl<S: BlobStorage + 'static> Registry<S> {
 
             // Use "latest" tag if available, otherwise use the first tag alphabetically
             let ref_key_to_use = latest_ref_key.unwrap_or_else(|| {
-                format!("refs/{}/{}", namespace_path, tags.first().unwrap_or(&"latest".to_string()))
+                format!(
+                    "refs/{}/{}",
+                    namespace_path,
+                    tags.first().unwrap_or(&"latest".to_string())
+                )
             });
 
             // Get the manifest hash for this reference
@@ -349,8 +355,9 @@ impl<S: BlobStorage + 'static> Registry<S> {
                             match Manifest::from_bytes(&manifest_bytes) {
                                 Ok(manifest) => {
                                     // Parse namespace and name from namespace_path
-                                    let (namespace, name) = Self::parse_namespace_path(&namespace_path);
-                                    
+                                    let (namespace, name) =
+                                        Self::parse_namespace_path(&namespace_path);
+
                                     let template_info = TemplateInfo::new(
                                         name,
                                         namespace,
@@ -358,7 +365,7 @@ impl<S: BlobStorage + 'static> Registry<S> {
                                         manifest_hash,
                                         manifest.metadata.clone(),
                                     );
-                                    
+
                                     template_infos.push(template_info);
                                 }
                                 Err(_) => {
@@ -387,7 +394,7 @@ impl<S: BlobStorage + 'static> Registry<S> {
     }
 
     /// Parse a reference key to extract namespace/name path and tag
-    /// 
+    ///
     /// Examples:
     /// - "refs/invoice/latest" -> Some(("invoice", "latest"))
     /// - "refs/john/invoice/v1.0.0" -> Some(("john/invoice", "v1.0.0"))
@@ -406,7 +413,7 @@ impl<S: BlobStorage + 'static> Registry<S> {
 
         // Last part is always the tag
         let tag = parts.last().unwrap().to_string();
-        
+
         // Everything else is the namespace path
         let namespace_path = parts[..parts.len() - 1].join("/");
 
@@ -414,14 +421,14 @@ impl<S: BlobStorage + 'static> Registry<S> {
     }
 
     /// Parse namespace path to extract namespace and name
-    /// 
+    ///
     /// Examples:
     /// - "invoice" -> (None, "invoice")
     /// - "john/invoice" -> (Some("john"), "invoice")
     /// - "acme-corp/letterhead" -> (Some("acme-corp"), "letterhead")
     fn parse_namespace_path(namespace_path: &str) -> (Option<String>, String) {
         let parts: Vec<&str> = namespace_path.split('/').collect();
-        
+
         if parts.len() == 1 {
             // No namespace, just name
             (None, parts[0].to_string())
@@ -440,7 +447,7 @@ impl<S: BlobStorage + 'static> Registry<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{bundle::TemplateMetadata, storage::blob_storage::MemoryStorage};
+    use crate::{S3Storage, bundle::TemplateMetadata, storage::blob_storage::MemoryStorage};
 
     fn create_test_bundle() -> TemplateBundle {
         let metadata = TemplateMetadata::new("Test Template", "test@example.com");
@@ -943,6 +950,35 @@ Content: #data.content"#
         assert_eq!(template.full_name(), "john/invoice");
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_registry_list_templates_no_namespace() {
+        unsafe {
+            std::env::set_var("S3_ENDPOINT_URL", "http://localhost:9000");
+            std::env::set_var("S3_ACCESS_KEY_ID", "minioadmin");
+            std::env::set_var("S3_SECRET_ACCESS_KEY", "minioadmin");
+            std::env::set_var("S3_BUCKET", "papermake-registry-test");
+            std::env::set_var("S3_REGION", "us-east-1");
+        }
+        let storage = S3Storage::from_env().await.unwrap();
+        storage.ensure_bucket().await.unwrap();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish a template
+        let _manifest_hash = registry.publish(bundle, "invoice", "latest").await.unwrap();
+
+        let templates = registry.list_templates().await.unwrap();
+        assert_eq!(templates.len(), 1);
+
+        let template = &templates[0];
+        assert_eq!(template.name, "invoice");
+        assert_eq!(template.namespace, None);
+        assert_eq!(template.tags, vec!["latest"]);
+        assert_eq!(template.metadata.name, "Test Template");
+        assert_eq!(template.metadata.author, "test@example.com");
+        assert_eq!(template.full_name(), "invoice");
+    }
+
     #[tokio::test]
     async fn test_registry_list_templates_multiple_tags() {
         let storage = MemoryStorage::new();
@@ -966,7 +1002,7 @@ Content: #data.content"#
         let template = &templates[0];
         assert_eq!(template.name, "invoice");
         assert_eq!(template.namespace, Some("john".to_string()));
-        
+
         // Tags should be sorted
         let mut expected_tags = vec!["latest", "v1.0.0"];
         expected_tags.sort();
@@ -988,9 +1024,18 @@ Content: #data.content"#
         let bundle3 = TemplateBundle::new(b"official content".to_vec(), metadata3);
 
         // Publish templates in different namespaces
-        registry.publish(bundle1, "john/invoice", "latest").await.unwrap();
-        registry.publish(bundle2, "alice/letter", "latest").await.unwrap();
-        registry.publish(bundle3, "invoice", "official").await.unwrap(); // No namespace
+        registry
+            .publish(bundle1, "john/invoice", "latest")
+            .await
+            .unwrap();
+        registry
+            .publish(bundle2, "alice/letter", "latest")
+            .await
+            .unwrap();
+        registry
+            .publish(bundle3, "invoice", "official")
+            .await
+            .unwrap(); // No namespace
 
         let templates = registry.list_templates().await.unwrap();
         assert_eq!(templates.len(), 3);
@@ -1038,10 +1083,7 @@ Content: #data.content"#
             None
         );
 
-        assert_eq!(
-            Registry::<MemoryStorage>::parse_ref_key("refs/"),
-            None
-        );
+        assert_eq!(Registry::<MemoryStorage>::parse_ref_key("refs/"), None);
 
         assert_eq!(
             Registry::<MemoryStorage>::parse_ref_key("refs/onlyname"),
