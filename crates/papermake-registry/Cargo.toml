@@ -19,20 +19,24 @@ serde_json = "1.0"
 async-trait = "0.1"
 time = { version = "0.3", features = ["serde", "macros"] }
 thiserror = "1.0"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
 sha2 = "0.10"
 
-# Optional features for different storage backends
+# Optional features
 tokio = { version = "1.0", features = ["fs"], optional = true }
 
-# Storage backends
+# BlobStorage Backends
 minio = { version = "0.3.0", optional = true }
 futures-util = { version = "0.3", optional = true }
 bytes = { version = "1.0", optional = true }
 
+# RenderStorage Backends
+clickhouse = { version = "0.13", features = ["uuid", "time"], optional = true }
+
 [features]
-default = ["s3"]
+default = ["s3", "clickhouse"]
 s3 = ["minio", "futures-util", "bytes", "tokio"]
+clickhouse = ["dep:clickhouse", "tokio"]
 memory = []
 
 [dev-dependencies]

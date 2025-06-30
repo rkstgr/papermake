@@ -31,6 +31,10 @@ pub enum RegistryError {
     #[error("Cache error: {0}")]
     Cache(#[from] CacheError),
 
+    /// Render storage errors
+    #[error("Render storage error: {0}")]
+    RenderStorage(#[from] crate::render_storage::RenderStorageError),
+
     /// Authorization and permission errors
     #[error("Access denied: {0}")]
     AccessDenied(String),

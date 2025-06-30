@@ -53,12 +53,17 @@ pub mod error;
 pub mod manifest;
 pub mod reference;
 pub mod registry;
+pub mod render_storage;
 pub mod storage;
 
 pub use bundle::TemplateInfo;
 pub use error::RegistryError;
 pub use registry::Registry;
+pub use render_storage::{RenderStorage, RenderRecord, AnalyticsQuery, AnalyticsResult};
 pub use storage::{BlobStorage, TypstFileSystem};
 
 #[cfg(feature = "s3")]
 pub use storage::s3_storage::S3Storage;
+
+#[cfg(feature = "clickhouse")]
+pub use render_storage::clickhouse::ClickHouseStorage;

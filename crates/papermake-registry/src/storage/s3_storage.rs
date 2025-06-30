@@ -40,7 +40,7 @@ impl S3Storage {
     /// - S3_ENDPOINT_URL (for S3-compatible services like MinIO)
     /// - S3_BUCKET
     /// - S3_REGION (optional)
-    pub async fn from_env() -> Result<Self, StorageError> {
+    pub fn from_env() -> Result<Self, StorageError> {
         let bucket = std::env::var("S3_BUCKET").map_err(|_| {
             StorageError::Backend("S3_BUCKET environment variable not set".to_string())
         })?;

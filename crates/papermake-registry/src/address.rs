@@ -32,6 +32,20 @@ impl ContentAddress {
         format!("refs/{}/{}", namespace, tag)
     }
 
+    /// Generate storage key for render input data
+    /// Example: "data/sha256/abc123def456..."
+    pub fn data_key(hash: &str) -> String {
+        let hash_value = Self::extract_hash_value(hash);
+        format!("data/sha256/{}", hash_value)
+    }
+
+    /// Generate storage key for rendered PDF
+    /// Example: "pdfs/sha256/abc123def456..."
+    pub fn pdf_key(hash: &str) -> String {
+        let hash_value = Self::extract_hash_value(hash);
+        format!("pdfs/sha256/{}", hash_value)
+    }
+
     /// Extract hash value from full hash string (removes "sha256:" prefix)
     /// Example: "sha256:abc123..." -> "abc123..."
     pub fn extract_hash_value(hash: &str) -> &str {
@@ -111,6 +125,20 @@ mod tests {
         // Org template
         let key = ContentAddress::ref_key("acme-corp/letterhead", "stable");
         assert_eq!(key, "refs/acme-corp/letterhead/stable");
+    }
+
+    #[test]
+    fn test_data_key_generation() {
+        let hash = "sha256:abc123def456789";
+        let key = ContentAddress::data_key(&hash);
+        assert_eq!(key, "data/sha256/abc123def456789");
+    }
+
+    #[test]
+    fn test_pdf_key_generation() {
+        let hash = "sha256:abc123def456789";
+        let key = ContentAddress::pdf_key(&hash);
+        assert_eq!(key, "pdfs/sha256/abc123def456789");
     }
 
     #[test]

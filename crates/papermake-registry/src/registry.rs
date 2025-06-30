@@ -7,22 +7,53 @@ use crate::{
     error::{RegistryError, StorageError},
     manifest::Manifest,
     reference::Reference,
+    render_storage::{AnalyticsQuery, AnalyticsResult, RenderRecord, RenderStorage},
     storage::{BlobStorage, filesystem::RegistryFileSystem},
 };
 
 /// Core registry for template publishing and resolution
-pub struct Registry<S: BlobStorage> {
+pub struct Registry<S: BlobStorage, R: RenderStorage> {
     storage: Arc<S>,
+    render_storage: Option<Arc<R>>,
 }
 
-impl<S: BlobStorage + 'static> Registry<S> {
+/// Result of a render operation with tracking
+#[derive(Debug)]
+pub struct RenderResult {
+    /// UUIDv7 for the render operation
+    pub render_id: String,
+    /// Generated PDF bytes
+    pub pdf_bytes: Vec<u8>,
+    /// SHA-256 hash of the PDF
+    pub pdf_hash: String,
+    /// Render duration in milliseconds
+    pub duration_ms: u32,
+}
+
+// Implementation for Registry with blob storage only
+impl<S: BlobStorage + 'static, R: RenderStorage> Registry<S, R> {
     /// Create a new registry with the given storage backend
-    pub fn new(storage: S) -> Self {
+    pub fn new(storage: S, render_storage: R) -> Self {
         Self {
             storage: Arc::new(storage),
+            render_storage: Some(Arc::new(render_storage)),
         }
     }
+}
 
+// Implementation for Registry with both blob and render storage
+impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
+    /// Create a new registry with both blob and render storage
+    pub fn new_with_render_storage(storage: S, render_storage: R) -> Self {
+        Self {
+            storage: Arc::new(storage),
+            render_storage: Some(Arc::new(render_storage)),
+        }
+    }
+}
+
+// Shared implementation for all registry types
+impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
     /// Publish a template bundle to the registry
     ///
     /// This method implements the "store files → create manifest → update refs" workflow:

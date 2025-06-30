@@ -4,7 +4,7 @@
 //! and analytics for the Papermake PDF generation system.
 
 use axum::{Router, extract::DefaultBodyLimit, response::Json, routing::get};
-use papermake_registry::{Registry, S3Storage};
+use papermake_registry::{ClickHouseStorage, Registry, S3Storage, render_storage::clickhouse};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 use tower::ServiceBuilder;
@@ -24,7 +24,7 @@ use crate::models::RenderJob;
 /// Main application state
 #[derive(Clone)]
 pub struct AppState {
-    pub registry: Arc<Registry<S3Storage>>,
+    pub registry: Arc<Registry<S3Storage, ClickHouseStorage>>,
     pub config: ServerConfig,
     pub job_sender: tokio::sync::mpsc::UnboundedSender<RenderJob>,
 }
@@ -49,7 +49,8 @@ async fn main() -> Result<()> {
         config.host, config.port
     );
 
-    let s3_storage = S3Storage::from_env().await.unwrap(); // TODO: improve error handling
+    let s3_storage = S3Storage::from_env().unwrap(); // TODO: improve error handling
+    let clickhouse = ClickHouseStorage::from_env().unwrap();
 
     // Ensure S3 bucket exists
     if let Err(e) = s3_storage.ensure_bucket().await {
@@ -57,7 +58,7 @@ async fn main() -> Result<()> {
     }
 
     // Create registry
-    let registry = Arc::new(Registry::new(s3_storage));
+    let registry = Arc::new(Registry::new(s3_storage, clickhouse));
 
     // Create job channel for event-driven processing
     let (job_sender, _job_receiver) = tokio::sync::mpsc::unbounded_channel();
