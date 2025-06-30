@@ -36,6 +36,9 @@ pub trait BlobStorage: Send + Sync {
 
     /// Delete data by key
     async fn delete(&self, key: &str) -> Result<(), StorageError>;
+
+    /// List all keys with the given prefix
+    async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StorageError>;
 }
 
 /// In-memory storage implementation for testing
@@ -114,6 +117,22 @@ impl BlobStorage for MemoryStorage {
         storage.remove(key);
         Ok(())
     }
+
+    async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        let storage = self
+            .data
+            .lock()
+            .map_err(|_| StorageError::Backend("Lock poisoned".into()))?;
+
+        let mut keys: Vec<String> = storage
+            .keys()
+            .filter(|key| key.starts_with(prefix))
+            .cloned()
+            .collect();
+
+        keys.sort();
+        Ok(keys)
+    }
 }
 
 #[cfg(test)]
@@ -173,5 +192,48 @@ mod tests {
         storage.clear();
         assert_eq!(storage.len(), 0);
         assert!(storage.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_memory_storage_list_keys() {
+        let storage = MemoryStorage::new();
+
+        // Add some test keys
+        storage.put("refs/john/invoice/latest", b"hash1".to_vec()).await.unwrap();
+        storage.put("refs/john/invoice/v1.0.0", b"hash2".to_vec()).await.unwrap();
+        storage.put("refs/alice/letter/latest", b"hash3".to_vec()).await.unwrap();
+        storage.put("blobs/sha256/abc123", b"data1".to_vec()).await.unwrap();
+        storage.put("manifests/sha256/def456", b"data2".to_vec()).await.unwrap();
+
+        // Test listing with "refs/" prefix
+        let ref_keys = storage.list_keys("refs/").await.unwrap();
+        assert_eq!(ref_keys.len(), 3);
+        assert!(ref_keys.contains(&"refs/alice/letter/latest".to_string()));
+        assert!(ref_keys.contains(&"refs/john/invoice/latest".to_string()));
+        assert!(ref_keys.contains(&"refs/john/invoice/v1.0.0".to_string()));
+
+        // Test listing with more specific prefix
+        let john_keys = storage.list_keys("refs/john/").await.unwrap();
+        assert_eq!(john_keys.len(), 2);
+        assert!(john_keys.contains(&"refs/john/invoice/latest".to_string()));
+        assert!(john_keys.contains(&"refs/john/invoice/v1.0.0".to_string()));
+
+        // Test listing with prefix that doesn't match anything
+        let empty_keys = storage.list_keys("nonexistent/").await.unwrap();
+        assert!(empty_keys.is_empty());
+
+        // Test listing all keys with empty prefix
+        let all_keys = storage.list_keys("").await.unwrap();
+        assert_eq!(all_keys.len(), 5);
+
+        // Results should be sorted
+        let sorted_keys = storage.list_keys("refs/").await.unwrap();
+        let mut expected = vec![
+            "refs/alice/letter/latest".to_string(),
+            "refs/john/invoice/latest".to_string(),
+            "refs/john/invoice/v1.0.0".to_string(),
+        ];
+        expected.sort();
+        assert_eq!(sorted_keys, expected);
     }
 }

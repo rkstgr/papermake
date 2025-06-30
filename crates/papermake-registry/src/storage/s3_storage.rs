@@ -219,6 +219,10 @@ impl BlobStorage for S3Storage {
 
         Ok(())
     }
+
+    async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, StorageError> {
+        self.list_files(prefix).await
+    }
 }
 
 /// Utility functions for generating S3 keys for different types of content

@@ -151,6 +151,48 @@ impl TemplateBundle {
     }
 }
 
+/// Information about a template in the registry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemplateInfo {
+    /// Template name
+    pub name: String,
+    /// Optional namespace (user or organization)
+    pub namespace: Option<String>,
+    /// Available tags for this template
+    pub tags: Vec<String>,
+    /// The manifest hash for the latest tag
+    pub latest_manifest_hash: String,
+    /// Template metadata
+    pub metadata: TemplateMetadata,
+}
+
+impl TemplateInfo {
+    /// Create new template info
+    pub fn new(
+        name: String,
+        namespace: Option<String>,
+        tags: Vec<String>,
+        latest_manifest_hash: String,
+        metadata: TemplateMetadata,
+    ) -> Self {
+        Self {
+            name,
+            namespace,
+            tags,
+            latest_manifest_hash,
+            metadata,
+        }
+    }
+
+    /// Get the full template reference (namespace/name or just name)
+    pub fn full_name(&self) -> String {
+        match &self.namespace {
+            Some(ns) => format!("{}/{}", ns, self.name),
+            None => self.name.clone(),
+        }
+    }
+}
+
 /// Errors that can occur during template bundle validation
 #[derive(Debug, thiserror::Error)]
 pub enum TemplateValidationError {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{
     address::ContentAddress,
-    bundle::TemplateBundle,
+    bundle::{TemplateBundle, TemplateInfo},
     error::{RegistryError, StorageError},
     manifest::Manifest,
     reference::Reference,
@@ -262,6 +262,177 @@ impl<S: BlobStorage + 'static> Registry<S> {
                     error_messages.join("; ")
                 )),
             ))
+        }
+    }
+
+    /// List all templates in the registry
+    ///
+    /// This method scans all references in storage and groups them by template
+    /// to provide a comprehensive list of available templates with their metadata.
+    ///
+    /// # Returns
+    /// Returns a vector of `TemplateInfo` structs containing:
+    /// - Template name and namespace
+    /// - Available tags
+    /// - Latest manifest hash (from "latest" tag or newest tag)
+    /// - Template metadata from the manifest
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// use papermake_registry::Registry;
+    /// use papermake_registry::storage::blob_storage::MemoryStorage;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = MemoryStorage::new();
+    /// let registry = Registry::new(storage);
+    ///
+    /// let templates = registry.list_templates().await?;
+    /// for template in templates {
+    ///     println!("Template: {} ({})", template.name, template.full_name());
+    ///     println!("  Tags: {:?}", template.tags);
+    ///     println!("  Author: {}", template.metadata.author);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn list_templates(&self) -> Result<Vec<TemplateInfo>, RegistryError> {
+        // Step 1: List all reference keys with "refs/" prefix
+        let ref_keys = self
+            .storage
+            .list_keys("refs/")
+            .await
+            .map_err(|e| RegistryError::Storage(StorageError::backend(e.to_string())))?;
+
+        // Step 2: Parse reference keys to extract template information
+        let mut templates_map: BTreeMap<String, (Vec<String>, Option<String>)> = BTreeMap::new();
+
+        for ref_key in ref_keys {
+            // Parse reference key: "refs/{namespace}/{tag}" or "refs/{namespace}/{name}/{tag}"
+            if let Some(parsed) = Self::parse_ref_key(&ref_key) {
+                let (namespace_path, tag) = parsed;
+                
+                // Add this tag to the template's tag list
+                let entry = templates_map.entry(namespace_path.clone()).or_insert((Vec::new(), None));
+                entry.0.push(tag.clone());
+                
+                // If this is the "latest" tag, remember it for getting metadata
+                if tag == "latest" {
+                    entry.1 = Some(ref_key.clone());
+                }
+            }
+        }
+
+        // Step 3: For each unique template, resolve metadata
+        let mut template_infos = Vec::new();
+
+        for (namespace_path, (mut tags, latest_ref_key)) in templates_map {
+            // Sort tags for consistent output
+            tags.sort();
+
+            // Use "latest" tag if available, otherwise use the first tag alphabetically
+            let ref_key_to_use = latest_ref_key.unwrap_or_else(|| {
+                format!("refs/{}/{}", namespace_path, tags.first().unwrap_or(&"latest".to_string()))
+            });
+
+            // Get the manifest hash for this reference
+            match self.storage.get(&ref_key_to_use).await {
+                Ok(manifest_hash_bytes) => {
+                    let manifest_hash = match String::from_utf8(manifest_hash_bytes) {
+                        Ok(hash) => hash,
+                        Err(_) => continue, // Skip invalid UTF-8
+                    };
+
+                    // Load the manifest to get metadata
+                    let manifest_key = ContentAddress::manifest_key(&manifest_hash);
+                    match self.storage.get(&manifest_key).await {
+                        Ok(manifest_bytes) => {
+                            match Manifest::from_bytes(&manifest_bytes) {
+                                Ok(manifest) => {
+                                    // Parse namespace and name from namespace_path
+                                    let (namespace, name) = Self::parse_namespace_path(&namespace_path);
+                                    
+                                    let template_info = TemplateInfo::new(
+                                        name,
+                                        namespace,
+                                        tags,
+                                        manifest_hash,
+                                        manifest.metadata.clone(),
+                                    );
+                                    
+                                    template_infos.push(template_info);
+                                }
+                                Err(_) => {
+                                    // Skip templates with invalid manifests
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            // Skip templates with missing manifests
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => {
+                    // Skip invalid references
+                    continue;
+                }
+            }
+        }
+
+        // Sort templates by full name for consistent output
+        template_infos.sort_by(|a, b| a.full_name().cmp(&b.full_name()));
+
+        Ok(template_infos)
+    }
+
+    /// Parse a reference key to extract namespace/name path and tag
+    /// 
+    /// Examples:
+    /// - "refs/invoice/latest" -> Some(("invoice", "latest"))
+    /// - "refs/john/invoice/v1.0.0" -> Some(("john/invoice", "v1.0.0"))
+    /// - "invalid/key" -> None
+    fn parse_ref_key(ref_key: &str) -> Option<(String, String)> {
+        if !ref_key.starts_with("refs/") {
+            return None;
+        }
+
+        let path = &ref_key[5..]; // Remove "refs/" prefix
+        let parts: Vec<&str> = path.split('/').collect();
+
+        if parts.len() < 2 {
+            return None;
+        }
+
+        // Last part is always the tag
+        let tag = parts.last().unwrap().to_string();
+        
+        // Everything else is the namespace path
+        let namespace_path = parts[..parts.len() - 1].join("/");
+
+        Some((namespace_path, tag))
+    }
+
+    /// Parse namespace path to extract namespace and name
+    /// 
+    /// Examples:
+    /// - "invoice" -> (None, "invoice")
+    /// - "john/invoice" -> (Some("john"), "invoice")
+    /// - "acme-corp/letterhead" -> (Some("acme-corp"), "letterhead")
+    fn parse_namespace_path(namespace_path: &str) -> (Option<String>, String) {
+        let parts: Vec<&str> = namespace_path.split('/').collect();
+        
+        if parts.len() == 1 {
+            // No namespace, just name
+            (None, parts[0].to_string())
+        } else if parts.len() == 2 {
+            // namespace/name
+            (Some(parts[0].to_string()), parts[1].to_string())
+        } else {
+            // Multiple slashes - treat as namespace/name where namespace includes slashes
+            let name = parts.last().unwrap().to_string();
+            let namespace = parts[..parts.len() - 1].join("/");
+            (Some(namespace), name)
         }
     }
 }
@@ -737,5 +908,163 @@ Content: #data.content"#
 
         // PDFs should be different (different content)
         assert_ne!(pdf1, pdf2);
+    }
+
+    #[tokio::test]
+    async fn test_registry_list_templates_empty() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        let templates = registry.list_templates().await.unwrap();
+        assert!(templates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_registry_list_templates_single() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle = create_test_bundle();
+
+        // Publish a template
+        let _manifest_hash = registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        let templates = registry.list_templates().await.unwrap();
+        assert_eq!(templates.len(), 1);
+
+        let template = &templates[0];
+        assert_eq!(template.name, "invoice");
+        assert_eq!(template.namespace, Some("john".to_string()));
+        assert_eq!(template.tags, vec!["latest"]);
+        assert_eq!(template.metadata.name, "Test Template");
+        assert_eq!(template.metadata.author, "test@example.com");
+        assert_eq!(template.full_name(), "john/invoice");
+    }
+
+    #[tokio::test]
+    async fn test_registry_list_templates_multiple_tags() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+        let bundle1 = create_test_bundle();
+        let bundle2 = create_test_bundle();
+
+        // Publish same template with different tags
+        registry
+            .publish(bundle1, "john/invoice", "latest")
+            .await
+            .unwrap();
+        registry
+            .publish(bundle2, "john/invoice", "v1.0.0")
+            .await
+            .unwrap();
+
+        let templates = registry.list_templates().await.unwrap();
+        assert_eq!(templates.len(), 1);
+
+        let template = &templates[0];
+        assert_eq!(template.name, "invoice");
+        assert_eq!(template.namespace, Some("john".to_string()));
+        
+        // Tags should be sorted
+        let mut expected_tags = vec!["latest", "v1.0.0"];
+        expected_tags.sort();
+        assert_eq!(template.tags, expected_tags);
+    }
+
+    #[tokio::test]
+    async fn test_registry_list_templates_multiple_templates() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new(storage);
+
+        // Create different bundles
+        let metadata1 = TemplateMetadata::new("Invoice Template", "john@example.com");
+        let metadata2 = TemplateMetadata::new("Letter Template", "alice@example.com");
+        let metadata3 = TemplateMetadata::new("Official Invoice", "admin@example.com");
+
+        let bundle1 = TemplateBundle::new(b"invoice content".to_vec(), metadata1);
+        let bundle2 = TemplateBundle::new(b"letter content".to_vec(), metadata2);
+        let bundle3 = TemplateBundle::new(b"official content".to_vec(), metadata3);
+
+        // Publish templates in different namespaces
+        registry.publish(bundle1, "john/invoice", "latest").await.unwrap();
+        registry.publish(bundle2, "alice/letter", "latest").await.unwrap();
+        registry.publish(bundle3, "invoice", "official").await.unwrap(); // No namespace
+
+        let templates = registry.list_templates().await.unwrap();
+        assert_eq!(templates.len(), 3);
+
+        // Templates should be sorted by full name
+        assert_eq!(templates[0].full_name(), "alice/letter");
+        assert_eq!(templates[1].full_name(), "invoice");
+        assert_eq!(templates[2].full_name(), "john/invoice");
+
+        // Check individual templates
+        assert_eq!(templates[0].namespace, Some("alice".to_string()));
+        assert_eq!(templates[0].name, "letter");
+        assert_eq!(templates[0].metadata.author, "alice@example.com");
+
+        assert_eq!(templates[1].namespace, None);
+        assert_eq!(templates[1].name, "invoice");
+        assert_eq!(templates[1].metadata.author, "admin@example.com");
+
+        assert_eq!(templates[2].namespace, Some("john".to_string()));
+        assert_eq!(templates[2].name, "invoice");
+        assert_eq!(templates[2].metadata.author, "john@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_parse_ref_key() {
+        // Test valid reference keys
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_ref_key("refs/invoice/latest"),
+            Some(("invoice".to_string(), "latest".to_string()))
+        );
+
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_ref_key("refs/john/invoice/v1.0.0"),
+            Some(("john/invoice".to_string(), "v1.0.0".to_string()))
+        );
+
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_ref_key("refs/org/user/template/stable"),
+            Some(("org/user/template".to_string(), "stable".to_string()))
+        );
+
+        // Test invalid reference keys
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_ref_key("invalid/key"),
+            None
+        );
+
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_ref_key("refs/"),
+            None
+        );
+
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_ref_key("refs/onlyname"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_parse_namespace_path() {
+        // Test different namespace path formats
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_namespace_path("invoice"),
+            (None, "invoice".to_string())
+        );
+
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_namespace_path("john/invoice"),
+            (Some("john".to_string()), "invoice".to_string())
+        );
+
+        assert_eq!(
+            Registry::<MemoryStorage>::parse_namespace_path("org/user/template"),
+            (Some("org/user".to_string()), "template".to_string())
+        );
     }
 }

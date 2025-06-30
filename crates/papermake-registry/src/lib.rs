@@ -55,6 +55,8 @@ pub mod reference;
 pub mod registry;
 pub mod storage;
 
+pub use bundle::TemplateInfo;
+pub use error::RegistryError;
 pub use registry::Registry;
 pub use storage::{BlobStorage, TypstFileSystem};
 
