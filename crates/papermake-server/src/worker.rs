@@ -1,7 +1,10 @@
 //! Background worker for processing render jobs
 
+/*
+ * Legacy, needs to be updated
+ */
+
 use crate::{AppState, error::Result};
-use papermake_registry::{TemplateRegistry, entities::*};
 use tokio::time::Instant;
 use tracing::{debug, error, info};
 
@@ -17,15 +20,12 @@ fn parse_version_to_u64(version: &str) -> u64 {
 /// Background worker that processes pending render jobs
 pub struct RenderWorker {
     state: AppState,
-    job_receiver: tokio::sync::mpsc::UnboundedReceiver<papermake_registry::entities::RenderJob>,
+    job_receiver: tokio::sync::mpsc::UnboundedReceiver<_>,
 }
 
 impl RenderWorker {
     /// Create a new render worker
-    pub fn new(
-        state: AppState,
-        job_receiver: tokio::sync::mpsc::UnboundedReceiver<papermake_registry::entities::RenderJob>,
-    ) -> Self {
+    pub fn new(state: AppState, job_receiver: tokio::sync::mpsc::UnboundedReceiver<_>) -> Self {
         Self {
             state,
             job_receiver,
@@ -73,10 +73,7 @@ impl RenderWorker {
         {
             Ok(template_entry) => template_entry.template,
             Err(e) => {
-                let error_msg = format!(
-                    "Failed to get template {} {}",
-                    job.template_ref, e
-                );
+                let error_msg = format!("Failed to get template {} {}", job.template_ref, e);
                 error!("Render job {} failed: {}", job.id, error_msg);
                 job.fail(error_msg);
                 // Save failed job status
@@ -100,10 +97,7 @@ impl RenderWorker {
                     pdf_data.len()
                 );
                 // Generate S3 key for the PDF
-                let s3_key = format!(
-                    "renders/{}/{}.pdf",
-                    job.template_ref, job.id
-                );
+                let s3_key = format!("renders/{}/{}.pdf", job.template_ref, job.id);
 
                 // Store PDF in file storage
                 match self.store_pdf(&s3_key, pdf_data).await {
@@ -174,17 +168,12 @@ impl RenderWorker {
 
     /// Store PDF in file storage
     async fn store_pdf(&self, s3_key: &str, pdf_data: Vec<u8>) -> Result<()> {
-        let file_storage = self.state.registry.file_storage();
-        file_storage.put_file(s3_key, &pdf_data).await?;
-        Ok(())
+        todo!("Implement with new registry")
     }
 }
 
 /// Spawn the render worker in the background
-pub fn spawn_render_worker(
-    state: AppState,
-    job_receiver: tokio::sync::mpsc::UnboundedReceiver<papermake_registry::entities::RenderJob>,
-) {
+pub fn spawn_render_worker(state: AppState, job_receiver: tokio::sync::mpsc::UnboundedReceiver<_>) {
     tokio::spawn(async move {
         let worker = RenderWorker::new(state, job_receiver);
         worker.start().await;

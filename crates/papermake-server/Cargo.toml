@@ -7,8 +7,7 @@ edition = "2024"
 papermake = { path = "../papermake" }
 papermake-registry = { path = "../papermake-registry" }
 tokio = { version = "1", features = ["full"] }
-axum = { version = "0.8.3", features = ["ws"] }
-axum-extra = { version = "0.9", features = ["typed-header"] }
+axum = { version = "0.8.3", features = ["ws", "macros", "multipart"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["trace", "cors", "fs"] }
 tracing = "0.1"
