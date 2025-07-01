@@ -1,5 +1,7 @@
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use time;
 
 use crate::{
     address::ContentAddress,
@@ -7,7 +9,9 @@ use crate::{
     error::{RegistryError, StorageError},
     manifest::Manifest,
     reference::Reference,
-    render_storage::{AnalyticsQuery, AnalyticsResult, RenderRecord, RenderStorage},
+    render_storage::{
+        AnalyticsQuery, AnalyticsResult, RenderRecord, RenderStorage, RenderStorageError,
+    },
     storage::{BlobStorage, filesystem::RegistryFileSystem},
 };
 
@@ -18,7 +22,7 @@ pub struct Registry<S: BlobStorage, R: RenderStorage> {
 }
 
 /// Result of a render operation with tracking
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct RenderResult {
     /// UUIDv7 for the render operation
     pub render_id: String,
@@ -48,6 +52,25 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
         Self {
             storage: Arc::new(storage),
             render_storage: Some(Arc::new(render_storage)),
+        }
+    }
+
+    /// Create a new registry with only blob storage (no render tracking)
+    pub fn new_blob_only(storage: S) -> Registry<S, crate::render_storage::MemoryRenderStorage> {
+        Registry {
+            storage: Arc::new(storage),
+            render_storage: None,
+        }
+    }
+}
+
+// Implementation for backward compatibility with existing tests
+impl<S: BlobStorage + 'static> Registry<S, crate::render_storage::MemoryRenderStorage> {
+    /// Create a new registry with only blob storage (backward compatibility)
+    pub fn new_storage_only(storage: S) -> Self {
+        Self {
+            storage: Arc::new(storage),
+            render_storage: None,
         }
     }
 }
@@ -473,6 +496,326 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
             (Some(namespace), name)
         }
     }
+
+    /// Render a template with comprehensive tracking and content-addressable storage
+    ///
+    /// This method implements the full render pipeline with tracking:
+    /// 1. Parse template reference to extract name/tag
+    /// 2. Hash and store input data as content-addressable blob
+    /// 3. Measure render execution time
+    /// 4. Call existing render logic (template resolution + compilation)
+    /// 5. Hash and store PDF output as content-addressable blob
+    /// 6. Generate UUIDv7 for distributed-friendly render tracking
+    /// 7. Create and store RenderRecord with all metadata
+    /// 8. Return RenderResult with tracking info
+    ///
+    /// # Arguments
+    /// * `reference` - Template reference (e.g., "john/invoice:latest")
+    /// * `data` - JSON data to inject into the template
+    ///
+    /// # Returns
+    /// Returns `RenderResult` with render ID, PDF bytes, hash, and duration
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// use papermake_registry::Registry;
+    /// use papermake_registry::storage::blob_storage::MemoryStorage;
+    /// use papermake_registry::render_storage::MemoryRenderStorage;
+    /// use serde_json::json;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = MemoryStorage::new();
+    /// let render_storage = MemoryRenderStorage::new();
+    /// let registry = Registry::new(storage, render_storage);
+    ///
+    /// let result = registry.render_and_store(
+    ///     "john/invoice:latest",
+    ///     &json!({
+    ///         "customer_name": "Acme Corp",
+    ///         "total": "$1,000.00"
+    ///     })
+    /// ).await?;
+    ///
+    /// println!("Render ID: {}", result.render_id);
+    /// println!("PDF size: {} bytes", result.pdf_bytes.len());
+    /// println!("Duration: {}ms", result.duration_ms);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn render_and_store(
+        &self,
+        reference: &str,
+        data: &serde_json::Value,
+    ) -> Result<RenderResult, RegistryError> {
+        // Step 1: Parse template reference to extract name/tag
+        let parsed_ref = Reference::parse(reference)?;
+        let template_name = parsed_ref.full_name();
+        let template_tag = parsed_ref.tag.unwrap_or_else(|| "latest".to_string());
+
+        // Step 2: Hash input data and store as content-addressable blob
+        let data_bytes = serde_json::to_vec(data)?;
+        let data_hash = ContentAddress::hash(&data_bytes);
+        let data_key = ContentAddress::data_key(&data_hash);
+
+        // Store data blob for future retrieval
+        self.storage
+            .put(&data_key, data_bytes)
+            .await
+            .map_err(|e| RegistryError::Storage(StorageError::backend(e.to_string())))?;
+
+        let manifest_hash = self.resolve(reference).await?;
+
+        // Step 3: Measure total operation time including resolution
+        let start_time = std::time::Instant::now();
+
+        // Step 4: Try to resolve and render - catch all failures
+        let result: Result<(String, Vec<u8>), RegistryError> = async {
+            let pdf_bytes = self.render(reference, data).await?;
+            Ok((manifest_hash, pdf_bytes))
+        }
+        .await;
+
+        let duration_ms = start_time.elapsed().as_millis() as u32;
+
+        // Step 5: Handle overall success/failure
+        match result {
+            Ok((manifest_hash, pdf_bytes)) => {
+                // Hash and store PDF as content-addressable blob
+                let pdf_hash = ContentAddress::hash(&pdf_bytes);
+                let pdf_key = ContentAddress::pdf_key(&pdf_hash);
+
+                self.storage
+                    .put(&pdf_key, pdf_bytes.clone())
+                    .await
+                    .map_err(|e| RegistryError::Storage(StorageError::backend(e.to_string())))?;
+
+                // Step 6: Generate UUIDv7 for time-sortable render ID
+                let render_id = uuid::Uuid::now_v7().to_string();
+
+                // Step 7: Create successful render record with explicit render_id
+                let record = RenderRecord {
+                    render_id: render_id.clone(),
+                    timestamp: time::OffsetDateTime::now_utc(),
+                    template_ref: reference.to_string(),
+                    template_name,
+                    template_tag,
+                    manifest_hash,
+                    data_hash,
+                    pdf_hash: pdf_hash.clone(),
+                    success: true,
+                    duration_ms,
+                    pdf_size_bytes: pdf_bytes.len() as u32,
+                    error: None,
+                };
+
+                // Step 8: Store render record (if render storage available)
+                if let Some(render_storage) = &self.render_storage {
+                    render_storage.store_render(record).await?;
+                }
+
+                // Step 9: Return success result
+                Ok(RenderResult {
+                    render_id,
+                    pdf_bytes,
+                    pdf_hash,
+                    duration_ms,
+                })
+            }
+            Err(render_error) => {
+                // Create failure render record
+                let render_id = uuid::Uuid::now_v7().to_string();
+
+                let record = RenderRecord {
+                    render_id,
+                    timestamp: time::OffsetDateTime::now_utc(),
+                    template_ref: reference.to_string(),
+                    template_name,
+                    template_tag,
+                    manifest_hash: "unknown".to_string(), // Use placeholder for failed resolution
+                    data_hash,
+                    pdf_hash: String::new(),
+                    success: false,
+                    duration_ms,
+                    pdf_size_bytes: 0,
+                    error: Some(render_error.to_string()),
+                };
+
+                // Store failure record (if render storage available)
+                if let Some(render_storage) = &self.render_storage {
+                    render_storage.store_render(record).await?;
+                }
+
+                // Return original error
+                Err(render_error)
+            }
+        }
+    }
+
+    /// Get recent render records
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of records to return
+    ///
+    /// # Returns
+    /// Returns a vector of recent `RenderRecord`s sorted by timestamp (newest first)
+    ///
+    /// # Errors
+    /// Returns error if no render storage is configured or if query fails
+    pub async fn list_recent_renders(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<RenderRecord>, RegistryError> {
+        if let Some(render_storage) = &self.render_storage {
+            Ok(render_storage.list_recent_renders(limit).await?)
+        } else {
+            Err(RegistryError::RenderStorage(
+                RenderStorageError::Connection("No render storage configured".to_string()),
+            ))
+        }
+    }
+
+    /// Get render input data by render ID
+    ///
+    /// Retrieves the original JSON data used for a specific render operation
+    /// using content-addressable storage.
+    ///
+    /// # Arguments
+    /// * `render_id` - UUIDv7 render identifier
+    ///
+    /// # Returns
+    /// Returns the original JSON data used for rendering
+    ///
+    /// # Errors
+    /// Returns error if render not found, data not found, or deserialization fails
+    pub async fn get_render_data(
+        &self,
+        render_id: &str,
+    ) -> Result<serde_json::Value, RegistryError> {
+        // 1. Get render record from render storage
+        let render_storage = self.render_storage.as_ref().ok_or_else(|| {
+            RegistryError::RenderStorage(RenderStorageError::Connection(
+                "No render storage configured".to_string(),
+            ))
+        })?;
+
+        let record = render_storage.get_render(render_id).await?.ok_or_else(|| {
+            RegistryError::RenderStorage(RenderStorageError::NotFound(render_id.to_string()))
+        })?;
+
+        // 2. Retrieve data blob using content addressing
+        let data_key = ContentAddress::data_key(&record.data_hash);
+        let data_bytes = self
+            .storage
+            .get(&data_key)
+            .await
+            .map_err(|e| RegistryError::Storage(StorageError::backend(e.to_string())))?;
+
+        // 3. Deserialize JSON data
+        let data: serde_json::Value = serde_json::from_slice(&data_bytes)?;
+        Ok(data)
+    }
+
+    /// Get rendered PDF by render ID
+    ///
+    /// Retrieves the PDF output for a specific render operation
+    /// using content-addressable storage.
+    ///
+    /// # Arguments
+    /// * `render_id` - UUIDv7 render identifier
+    ///
+    /// # Returns
+    /// Returns the PDF bytes for the rendered template
+    ///
+    /// # Errors
+    /// Returns error if render not found, render failed, or PDF not found
+    pub async fn get_render_pdf(&self, render_id: &str) -> Result<Vec<u8>, RegistryError> {
+        // 1. Get render record from render storage
+        let render_storage = self.render_storage.as_ref().ok_or_else(|| {
+            RegistryError::RenderStorage(RenderStorageError::Connection(
+                "No render storage configured".to_string(),
+            ))
+        })?;
+
+        let record = render_storage.get_render(render_id).await?.ok_or_else(|| {
+            RegistryError::RenderStorage(RenderStorageError::NotFound(render_id.to_string()))
+        })?;
+
+        // 2. Check if render was successful
+        if !record.success {
+            return Err(RegistryError::RenderStorage(
+                RenderStorageError::InvalidQuery("Render failed, no PDF available".to_string()),
+            ));
+        }
+
+        // 3. Retrieve PDF blob using content addressing
+        let pdf_key = ContentAddress::pdf_key(&record.pdf_hash);
+        let pdf_bytes = self
+            .storage
+            .get(&pdf_key)
+            .await
+            .map_err(|e| RegistryError::Storage(StorageError::backend(e.to_string())))?;
+        Ok(pdf_bytes)
+    }
+
+    /// Get render analytics based on query type
+    ///
+    /// Supports various analytics queries for render volume, template statistics,
+    /// and performance metrics.
+    ///
+    /// # Arguments
+    /// * `query` - The type of analytics query to perform
+    ///
+    /// # Returns
+    /// Returns `AnalyticsResult` containing the requested analytics data
+    ///
+    /// # Examples
+    /// ```rust,no_run
+    /// use papermake_registry::{Registry, AnalyticsQuery};
+    /// use papermake_registry::storage::blob_storage::MemoryStorage;
+    /// use papermake_registry::render_storage::MemoryRenderStorage;
+    ///
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let storage = MemoryStorage::new();
+    /// let render_storage = MemoryRenderStorage::new();
+    /// let registry = Registry::new(storage, render_storage);
+    ///
+    /// // Get render volume over last 30 days
+    /// let volume_result = registry.get_render_analytics(
+    ///     AnalyticsQuery::VolumeOverTime { days: 30 }
+    /// ).await?;
+    ///
+    /// // Get template statistics
+    /// let template_stats = registry.get_render_analytics(
+    ///     AnalyticsQuery::TemplateStats
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn get_render_analytics(
+        &self,
+        query: AnalyticsQuery,
+    ) -> Result<AnalyticsResult, RegistryError> {
+        let render_storage = self.render_storage.as_ref().ok_or_else(|| {
+            RegistryError::RenderStorage(RenderStorageError::Connection(
+                "No render storage configured".to_string(),
+            ))
+        })?;
+
+        match query {
+            AnalyticsQuery::VolumeOverTime { days } => {
+                let volume = render_storage.render_volume_over_time(days).await?;
+                Ok(AnalyticsResult::Volume(volume))
+            }
+            AnalyticsQuery::TemplateStats => {
+                let stats = render_storage.total_renders_per_template().await?;
+                Ok(AnalyticsResult::Templates(stats))
+            }
+            AnalyticsQuery::DurationOverTime { days } => {
+                let duration = render_storage.average_duration_over_time(days).await?;
+                Ok(AnalyticsResult::Duration(duration))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -497,7 +840,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_publish() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         let manifest_hash = registry
@@ -512,7 +855,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_publish_stores_all_components() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         let manifest_hash = registry
@@ -540,7 +883,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_publish_content_addressable() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Create identical bundles
         let metadata1 = TemplateMetadata::new("Test Template", "test@example.com");
@@ -580,7 +923,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_publish_invalid_bundle() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Create bundle with empty metadata (should fail validation)
         let metadata = TemplateMetadata::new("", "test@example.com");
@@ -597,7 +940,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_basic() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // First publish a template
@@ -615,7 +958,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_different_reference_formats() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish template
@@ -639,7 +982,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_with_hash_verification() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish template
@@ -664,7 +1007,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_default_tag() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish with explicit "latest" tag
@@ -681,7 +1024,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_nonexistent_template() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Try to resolve a template that doesn't exist
         let result = registry.resolve("nonexistent/template:latest").await;
@@ -692,7 +1035,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_invalid_reference_format() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Try to resolve with invalid reference format
         let result = registry.resolve("").await;
@@ -708,7 +1051,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_resolve_official_template() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish an official template (no namespace)
@@ -726,7 +1069,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_publish_resolve_integration() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Create multiple templates with different namespaces and tags
         let metadata1 = TemplateMetadata::new("Invoice Template", "john@example.com");
@@ -778,7 +1121,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_render_basic() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish template
@@ -802,7 +1145,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_render_nonexistent_template() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         let data = serde_json::json!({
             "name": "Test Customer"
@@ -817,7 +1160,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_render_with_hash_verification() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish template
@@ -841,7 +1184,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_render_with_wrong_hash() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish template
@@ -867,7 +1210,7 @@ Hello #data.name"#
     #[tokio::test]
     async fn test_registry_render_template_with_imports() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Create a template with imports
         let metadata = TemplateMetadata::new("Template with Imports", "test@example.com");
@@ -912,7 +1255,7 @@ Content: #data.content"#
     #[tokio::test]
     async fn test_registry_render_different_data() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish template
@@ -951,7 +1294,7 @@ Content: #data.content"#
     #[tokio::test]
     async fn test_registry_list_templates_empty() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         let templates = registry.list_templates().await.unwrap();
         assert!(templates.is_empty());
@@ -960,7 +1303,7 @@ Content: #data.content"#
     #[tokio::test]
     async fn test_registry_list_templates_single() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish a template
@@ -990,9 +1333,9 @@ Content: #data.content"#
             std::env::set_var("S3_BUCKET", "papermake-registry-test");
             std::env::set_var("S3_REGION", "us-east-1");
         }
-        let storage = S3Storage::from_env().await.unwrap();
+        let storage = S3Storage::from_env().unwrap();
         storage.ensure_bucket().await.unwrap();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
         // Publish a template
@@ -1013,7 +1356,7 @@ Content: #data.content"#
     #[tokio::test]
     async fn test_registry_list_templates_multiple_tags() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
         let bundle1 = create_test_bundle();
         let bundle2 = create_test_bundle();
 
@@ -1043,7 +1386,7 @@ Content: #data.content"#
     #[tokio::test]
     async fn test_registry_list_templates_multiple_templates() {
         let storage = MemoryStorage::new();
-        let registry = Registry::new(storage);
+        let registry = Registry::new_storage_only(storage);
 
         // Create different bundles
         let metadata1 = TemplateMetadata::new("Invoice Template", "john@example.com");
@@ -1094,30 +1437,45 @@ Content: #data.content"#
     async fn test_parse_ref_key() {
         // Test valid reference keys
         assert_eq!(
-            Registry::<MemoryStorage>::parse_ref_key("refs/invoice/latest"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_ref_key(
+                "refs/invoice/latest"
+            ),
             Some(("invoice".to_string(), "latest".to_string()))
         );
 
         assert_eq!(
-            Registry::<MemoryStorage>::parse_ref_key("refs/john/invoice/v1.0.0"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_ref_key(
+                "refs/john/invoice/v1.0.0"
+            ),
             Some(("john/invoice".to_string(), "v1.0.0".to_string()))
         );
 
         assert_eq!(
-            Registry::<MemoryStorage>::parse_ref_key("refs/org/user/template/stable"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_ref_key(
+                "refs/org/user/template/stable"
+            ),
             Some(("org/user/template".to_string(), "stable".to_string()))
         );
 
         // Test invalid reference keys
         assert_eq!(
-            Registry::<MemoryStorage>::parse_ref_key("invalid/key"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_ref_key(
+                "invalid/key"
+            ),
             None
         );
 
-        assert_eq!(Registry::<MemoryStorage>::parse_ref_key("refs/"), None);
+        assert_eq!(
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_ref_key(
+                "refs/"
+            ),
+            None
+        );
 
         assert_eq!(
-            Registry::<MemoryStorage>::parse_ref_key("refs/onlyname"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_ref_key(
+                "refs/onlyname"
+            ),
             None
         );
     }
@@ -1126,18 +1484,315 @@ Content: #data.content"#
     async fn test_parse_namespace_path() {
         // Test different namespace path formats
         assert_eq!(
-            Registry::<MemoryStorage>::parse_namespace_path("invoice"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_namespace_path("invoice"),
             (None, "invoice".to_string())
         );
 
         assert_eq!(
-            Registry::<MemoryStorage>::parse_namespace_path("john/invoice"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_namespace_path("john/invoice"),
             (Some("john".to_string()), "invoice".to_string())
         );
 
         assert_eq!(
-            Registry::<MemoryStorage>::parse_namespace_path("org/user/template"),
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::parse_namespace_path("org/user/template"),
             (Some("org/user".to_string()), "template".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn test_render_and_store_success() {
+        let storage = MemoryStorage::new();
+        let render_storage = crate::render_storage::MemoryRenderStorage::new();
+        let registry = Registry::new(storage, render_storage);
+        let bundle = create_test_bundle();
+
+        // First publish a template
+        let _manifest_hash = registry
+            .publish(bundle, "test-user/test-template", "latest")
+            .await
+            .unwrap();
+
+        // Test data for rendering
+        let test_data = serde_json::json!({
+            "name": "Test User"
+        });
+
+        // Render with storage tracking
+        let result = registry
+            .render_and_store("test-user/test-template:latest", &test_data)
+            .await
+            .unwrap();
+
+        // Verify result structure
+        assert!(!result.render_id.is_empty());
+        assert!(!result.pdf_bytes.is_empty());
+        assert!(result.pdf_hash.starts_with("sha256:"));
+        assert!(result.duration_ms > 0);
+
+        // Verify render record was stored
+        let records = registry.list_recent_renders(10).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].render_id, result.render_id);
+        assert_eq!(records[0].template_name, "test-template");
+        assert_eq!(records[0].template_tag, "latest");
+        assert!(records[0].success);
+    }
+
+    #[tokio::test]
+    async fn test_render_and_store_without_render_storage() {
+        let storage = MemoryStorage::new();
+        // Create registry without render storage using new method for blob-only
+        let registry =
+            Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::new_blob_only(
+                storage,
+            );
+        let bundle = create_test_bundle();
+
+        // First publish a template
+        let _manifest_hash = registry
+            .publish(bundle, "test-user/test-template", "latest")
+            .await
+            .unwrap();
+
+        // Test data for rendering
+        let test_data = serde_json::json!({
+            "name": "Test User"
+        });
+
+        // Render with storage tracking should still work but not store records
+        let result = registry
+            .render_and_store("test-user/test-template:latest", &test_data)
+            .await
+            .unwrap();
+
+        // Verify result structure
+        assert!(!result.render_id.is_empty());
+        assert!(!result.pdf_bytes.is_empty());
+        assert!(result.pdf_hash.starts_with("sha256:"));
+        assert!(result.duration_ms > 0);
+
+        // Trying to list renders should fail without render storage
+        let list_result = registry.list_recent_renders(10).await;
+        assert!(list_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_render_history_methods() {
+        let storage = MemoryStorage::new();
+        let render_storage = crate::render_storage::MemoryRenderStorage::new();
+        let registry = Registry::new(storage, render_storage);
+        let bundle = create_test_bundle();
+
+        // First publish a template
+        let _manifest_hash = registry
+            .publish(bundle, "test-user/test-template", "latest")
+            .await
+            .unwrap();
+
+        // Test data for rendering
+        let test_data = serde_json::json!({
+            "name": "Test User",
+            "age": 25
+        });
+
+        // Render with storage tracking
+        let result = registry
+            .render_and_store("test-user/test-template:latest", &test_data)
+            .await
+            .unwrap();
+
+        // Test get_render_data
+        let retrieved_data = registry.get_render_data(&result.render_id).await.unwrap();
+        assert_eq!(retrieved_data, test_data);
+
+        // Test get_render_pdf
+        let retrieved_pdf = registry.get_render_pdf(&result.render_id).await.unwrap();
+        assert_eq!(retrieved_pdf, result.pdf_bytes);
+
+        // Test with non-existent render ID
+        let invalid_result = registry.get_render_data("invalid-uuid").await;
+        assert!(invalid_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_render_and_store_failure_tracking() {
+        let storage = MemoryStorage::new();
+        let render_storage = crate::render_storage::MemoryRenderStorage::new();
+        let registry = Registry::new(storage, render_storage);
+
+        // Test data for rendering
+        let test_data = serde_json::json!({
+            "name": "Test User"
+        });
+
+        // Try to render non-existent template (should fail)
+        let result = registry
+            .render_and_store("non-existent:latest", &test_data)
+            .await;
+        assert!(result.is_err());
+
+        // Verify failure was still tracked in render storage
+        let records = registry.list_recent_renders(10).await.unwrap();
+        assert_eq!(records.len(), 1);
+        assert!(!records[0].success);
+        assert!(records[0].error.is_some());
+        assert_eq!(records[0].template_name, "non-existent");
+        assert_eq!(records[0].template_tag, "latest");
+
+        // Getting PDF for failed render should fail
+        let pdf_result = registry.get_render_pdf(&records[0].render_id).await;
+        assert!(pdf_result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_render_analytics() {
+        let storage = MemoryStorage::new();
+        let render_storage = crate::render_storage::MemoryRenderStorage::new();
+        let registry = Registry::new(storage, render_storage);
+        let bundle = create_test_bundle();
+
+        // First publish a template
+        let _manifest_hash = registry
+            .publish(bundle, "test-user/test-template", "latest")
+            .await
+            .unwrap();
+
+        // Create another template for variety
+        let bundle2 = create_test_bundle();
+        let _manifest_hash2 = registry
+            .publish(bundle2, "other-template", "v1")
+            .await
+            .unwrap();
+
+        // Test data for rendering
+        let test_data = serde_json::json!({
+            "name": "Test User"
+        });
+
+        // Render multiple times to generate analytics data
+        for i in 0..3 {
+            let data = serde_json::json!({
+                "name": format!("User {}", i)
+            });
+            let _result = registry
+                .render_and_store("test-user/test-template:latest", &data)
+                .await
+                .unwrap();
+        }
+
+        // Render other template once
+        let _result = registry
+            .render_and_store("other-template:v1", &test_data)
+            .await
+            .unwrap();
+
+        // Test volume analytics
+        let volume_result = registry
+            .get_render_analytics(AnalyticsQuery::VolumeOverTime { days: 1 })
+            .await
+            .unwrap();
+        if let AnalyticsResult::Volume(volume_points) = volume_result {
+            assert!(!volume_points.is_empty());
+            assert!(volume_points.iter().any(|p| p.renders >= 4));
+        } else {
+            panic!("Expected Volume result");
+        }
+
+        // Test template statistics
+        let template_result = registry
+            .get_render_analytics(AnalyticsQuery::TemplateStats)
+            .await
+            .unwrap();
+        if let AnalyticsResult::Templates(template_stats) = template_result {
+            assert_eq!(template_stats.len(), 2);
+            let test_template_stats = template_stats
+                .iter()
+                .find(|s| s.template_name == "test-template")
+                .unwrap();
+            assert_eq!(test_template_stats.total_renders, 3);
+
+            let other_template_stats = template_stats
+                .iter()
+                .find(|s| s.template_name == "other-template")
+                .unwrap();
+            assert_eq!(other_template_stats.total_renders, 1);
+        } else {
+            panic!("Expected Templates result");
+        }
+
+        // Test duration analytics
+        let duration_result = registry
+            .get_render_analytics(AnalyticsQuery::DurationOverTime { days: 1 })
+            .await
+            .unwrap();
+        if let AnalyticsResult::Duration(duration_points) = duration_result {
+            assert!(!duration_points.is_empty());
+            assert!(duration_points.iter().any(|p| p.avg_duration_ms > 0.0));
+        } else {
+            panic!("Expected Duration result");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_extract_template_name() {
+        use crate::reference::Reference;
+
+        // Test various reference formats
+        let ref1 = Reference::parse("invoice:latest").unwrap();
+        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref1), "invoice");
+
+        let ref2 = Reference::parse("john/invoice:latest").unwrap();
+        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref2), "invoice");
+
+        let ref3 = Reference::parse("acme-corp/letterhead:stable").unwrap();
+        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref3), "letterhead");
+
+        let ref4 = Reference::parse("org/user/template:v1").unwrap();
+        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref4), "template");
+    }
+
+    #[tokio::test]
+    async fn test_content_addressable_storage() {
+        let storage = MemoryStorage::new();
+        let render_storage = crate::render_storage::MemoryRenderStorage::new();
+        let registry = Registry::new(storage, render_storage);
+        let bundle = create_test_bundle();
+
+        // First publish a template
+        let _manifest_hash = registry
+            .publish(bundle, "test-user/test-template", "latest")
+            .await
+            .unwrap();
+
+        // Test data for rendering
+        let test_data = serde_json::json!({
+            "name": "Test User"
+        });
+
+        // Render twice with same data
+        let result1 = registry
+            .render_and_store("test-user/test-template:latest", &test_data)
+            .await
+            .unwrap();
+
+        let result2 = registry
+            .render_and_store("test-user/test-template:latest", &test_data)
+            .await
+            .unwrap();
+
+        // Different render IDs but same content hashes (due to deduplication)
+        assert_ne!(result1.render_id, result2.render_id);
+        assert_eq!(result1.pdf_hash, result2.pdf_hash);
+
+        // Verify both renders can retrieve the same PDF content
+        let pdf1 = registry.get_render_pdf(&result1.render_id).await.unwrap();
+        let pdf2 = registry.get_render_pdf(&result2.render_id).await.unwrap();
+        assert_eq!(pdf1, pdf2);
+
+        // Verify both renders can retrieve the same data content
+        let data1 = registry.get_render_data(&result1.render_id).await.unwrap();
+        let data2 = registry.get_render_data(&result2.render_id).await.unwrap();
+        assert_eq!(data1, data2);
+        assert_eq!(data1, test_data);
     }
 }

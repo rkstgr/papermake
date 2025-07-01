@@ -332,7 +332,7 @@ mod tests {
             std::env::remove_var("S3_ENDPOINT_URL");
         }
 
-        let result = S3Storage::from_env().await;
+        let result = S3Storage::from_env();
         assert!(result.is_err());
 
         match result {
