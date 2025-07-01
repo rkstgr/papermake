@@ -4,12 +4,12 @@
 //! and analytics for the Papermake PDF generation system.
 
 use axum::{Router, extract::DefaultBodyLimit, response::Json, routing::get};
-use papermake_registry::{ClickHouseStorage, Registry, S3Storage, render_storage::clickhouse};
+use papermake_registry::{ClickHouseStorage, Registry, S3Storage};
 use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 mod config;
 mod error;
@@ -50,11 +50,15 @@ async fn main() -> Result<()> {
     );
 
     let s3_storage = S3Storage::from_env().unwrap(); // TODO: improve error handling
-    let clickhouse = ClickHouseStorage::from_env().unwrap();
 
     // Ensure S3 bucket exists
     if let Err(e) = s3_storage.ensure_bucket().await {
-        warn!("Failed to ensure S3 bucket exists: {}", e);
+        error!("Failed to ensure S3 bucket exists: {}", e);
+    }
+
+    let clickhouse = ClickHouseStorage::from_env().unwrap();
+    if let Err(e) = clickhouse.init_schema().await {
+        error!("Failed to initialize ClickHouse schema: {}", e);
     }
 
     // Create registry
@@ -109,7 +113,7 @@ fn create_router(state: AppState) -> Router {
 fn api_routes() -> Router<AppState> {
     Router::new()
         .nest("/templates", routes::templates::router())
-        .nest("/renders", routes::renders::router())
+        .nest("/render", routes::render::router())
         .nest("/analytics", routes::analytics::router())
 }
 

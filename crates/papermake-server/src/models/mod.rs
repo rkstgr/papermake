@@ -6,7 +6,5 @@ pub mod render;
 pub mod template;
 
 // Re-export commonly used types
-pub use analytics::*;
 pub use api::*;
 pub use render::*;
-pub use template::*;
