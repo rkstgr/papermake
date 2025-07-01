@@ -1,199 +1,183 @@
-# Papermake
+# 📄 Papermake
 
-Papermake is a fast PDF generation service built in Rust using [Typst](https://github.com/typst/typst) as the rendering engine. Generate PDFs via HTTP API or embed the core library directly in your applications.
+**Content-addressable template registry with server-side rendering for [Typst](https://typst.app/) documents.**
 
-* **🚀 Fast**: From request to PDF in under 20ms. That's 100x faster than traditional PDF generation methods.
-* **📐 Type-safe**: Schema validation with JSON data binding
-* **🔧 Production-ready**: Template versioning, background workers, and S3 storage
-
-⚠️ **Early Development**: APIs and features are subject to change.
-
-## Quick Start - HTTP API
-
-Get a PDF generated in under 2 minutes:
-
-### 1. Start the Services
+Turn your Typst templates into APIs. Publish once, render anywhere.
 
 ```bash
-git clone https://github.com/rkstgr/papermake-rs
-cd papermake-rs
+# Publish a template
+curl -X POST http://localhost:8080/templates/invoice/publish?tag=latest \
+  -F "main_typ=@invoice.typ" \
+  -F "schema=@schema.json" \
+  -F "metadata={\"name\":\"Invoice\",\"author\":\"you@company.com\"}"
 
-# Start MinIO (S3-compatible storage)
+# Render with data → PDF
+curl -X POST http://localhost:8080/render/invoice:latest \
+  -H "Content-Type: application/json" \
+  -d '{"company": "Acme Corp", "amount": 1500}' \
+  --output invoice.pdf
+```
+
+## 🚀 Why Papermake?
+
+- **🏗️ Template as Code** - Version your document templates like software
+- **⚡ Server-side Rendering** - No local Typst installation needed
+- **🔒 Content-Addressable** - Immutable, deduplicated storage (like Git for documents)
+- **📊 Built-in Analytics** - Track usage, performance, and errors
+- **🐳 Self-hostable** - Deploy anywhere with Docker
+
+![Papermake UI](https://github.com/rkstgr/papermake/blob/main/papermake-webui.jpeg?raw=true)
+
+## 🏃‍♂️ Quick Start
+
+### Using Docker Compose
+
+```bash
+git clone https://github.com/rkstgr/papermake
+cd papermake
 docker-compose up -d
-
-# Start the Papermake server
-cargo run -p papermake-server
 ```
 
-Server starts at `http://localhost:3000`
+This starts:
+- **Papermake Server** on `localhost:8080`
+- **MinIO** (S3-compatible storage) on `localhost:9000`, inspectable at `http://localhost:9001`
+- **ClickHouse** (analytics) on `localhost:8123`
 
-### 2. Create a Template
+### Manual Setup
 
 ```bash
-curl -X POST http://localhost:3000/api/templates \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "hello-world",
-    "name": "Hello World Template",
-    "content": "Hello #data.name!",
-    "author": "you",
-    "schema": {
-      "type": "object",
-      "properties": {
-        "name": {"type": "string"}
-      }
-    }
-  }'
+# Copy and update .env with your S3 and Clickhouse credentials
+cp .env.example .env
+
+# Run the server
+cargo run -r -p papermake-server
 ```
 
-### 3. Generate a PDF
+## 📚 Usage
+
+### Publishing Templates
+
+Templates consist of:
+- `main.typ` - Your Typst template file
+- files: Images, fonts, other files (optional)
+- Metadata - Name, author, description
+
+```typst
+// invoice.typ
+// #data is automatically populated with the input data
+= Invoice #data.number
+
+*Bill To:* #data.customer.name
+*Amount:* $#data.amount
+```
 
 ```bash
-curl -X POST http://localhost:3000/api/renders \
-  -H "Content-Type: application/json" \
+curl -X POST localhost:8080/templates/invoice/publish?tag=latest \
+  -F "main_typ=@invoice.typ" \
+  -F "files[]=@logo.png" \
+  -F "metadata={\"name\":\"Professional Invoice\",\"author\":\"finance@company.com\"}"
+
+# simple publish endpoint
+curl -X POST http://localhost:3000/api/templates/invoice/publish-simple \
+  -H 'Content-Type: application/json' \
   -d '{
-    "template_id": "hello-world",
-    "template_version": 1,
-    "data": {"name": "World"}
-  }'
+  "main_typ": "#set text(font: \"Arial\")\nhello #data.name",
+  "metadata": {
+    "author": "dev@bigbank.com"
+    "name": "Customer Invoice",
+  }
+}'
 ```
 
-Returns a render job ID like:
+Returns
 ```json
 {
   "data": {
-    "id": "b2d56b44-0431-438a-b88e-16841b87cbf8",
-    "status": "queued",
-    "created_at": "2025-06-23T20:53:53.291987Z",
-    "estimated_completion": null
-  }
+    "message": "Template 'invoice:latest' published successfully",
+    "manifest_hash": "sha256:8e0e58437230ce87a69a77edec3a24412a2f656bc42456f7f87c61d5de1ad5f9",
+    "reference": "invoice:latest"
+  },
+  "message": "Template published with reference 'invoice:latest'"
 }
 ```
 
-### 4. Download the PDF
+### Rendering Documents
 
 ```bash
-# Check status
-curl http://localhost:3000/api/renders/b2d56b44-0431-438a-b88e-16841b87cbf8
-
-# Download PDF when completed
-curl http://localhost:3000/api/renders/b2d56b44-0431-438a-b88e-16841b87cbf8/pdf -o hello.pdf
-```
-
-## More Examples
-
-### Batch Rendering
-
-Generate multiple PDFs at once:
-
-```bash
-curl -X POST http://localhost:3000/api/renders/batch \
+# Render to PDF
+curl -X POST localhost:8080/render/invoice:latest \
   -H "Content-Type: application/json" \
   -d '{
-    "requests": [
-      {
-        "template_id": "hello-world",
-        "template_version": 1,
-        "data": {"name": "Alice"}
-      },
-      {
-        "template_id": "hello-world",
-        "template_version": 1,
-        "data": {"name": "Bob"}
-      }
-    ]
-  }'
+    "number": "INV-001",
+    "customer": {"name": "Acme Corp"},
+    "amount": 1500
+  }' \
+  --output invoice.pdf
 ```
 
-### Template Management
+### Analytics & History
 
 ```bash
-# List all templates
-curl http://localhost:3000/api/templates
+# Recent renders
+curl localhost:8080/renders?limit=10
 
-# Get specific template
-curl http://localhost:3000/api/templates/invoice
+# Template usage stats
+curl localhost:8080/analytics/templates
 
-# List template versions
-curl http://localhost:3000/api/templates/invoice/versions
+# Performance over time
+curl localhost:8080/analytics/duration?days=30
 ```
 
-## Using the Core Library
+## 🏗️ Architecture
 
-For embedding Papermake directly in your Rust applications:
-
-```rust
-use papermake::{TemplateBuilder, Schema};
-use serde_json::json;
-
-// Create a template with builder pattern
-let template = TemplateBuilder::new("invoice".into())
-    .name("Invoice Template")
-    .content("= Invoice\n\nHello #data.name!\nTotal: $#data.amount")
-    .schema(Schema::from_value(json!({
-        "type": "object",
-        "properties": {
-            "name": {"type": "string"},
-            "amount": {"type": "number"}
-        }
-    })))
-    .build()?;
-
-// Render with data
-let data = json!({
-    "name": "John Doe",
-    "amount": 1250.50
-});
-
-let result = template.render(&data)?;
-if let Some(pdf_bytes) = result.pdf {
-    std::fs::write("invoice.pdf", pdf_bytes)?;
-}
+```
+┌─────────────────┐    ┌──────────────────┐    ┌────────────────┐
+│   Templates     │───▶│   Papermake      │───▶│    Registry    │
+│   (Multipart)   │    │   Server         │    │   (S3 + CH)    │
+└─────────────────┘    └──────────────────┘    └────────────────┘
+                                │
+                                ▼
+                       ┌──────────────────┐
+                       │   Typst Engine   │
+                       │   (Rendering)    │
+                       └──────────────────┘
 ```
 
-### High-Performance Rendering
+- **Content-Addressable Storage** - Templates stored by hash, deduplicated automatically
+- **Immutable Versions** - `invoice:v1.0.0` never changes, `invoice:latest` is mutable
+- **Render Tracking** - Every render logged with input/output hashes for full auditability
 
-For high-volume scenarios, use template caching:
+## 🛠️ API Reference
 
-```rust
-// Build with caching for better performance
-let cached_template = TemplateBuilder::new("report".into())
-    .content(include_str!("templates/report.typ"))
-    .build_cached()?;
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/templates/{name}/publish?tag={tag}` | Upload template |
+| `GET` | `/templates` | List all templates |
+| `GET` | `/templates/{name}/tags` | List template versions |
+| `POST` | `/render/{name}:{tag}` | Render template to PDF |
+| `GET` | `/renders?limit=N` | Recent render history |
+| `GET` | `/renders/{id}/pdf` | Download rendered PDF |
+| `GET` | `/analytics/volume?days=N` | Render volume over time |
 
-// Multiple renders reuse the compiled template
-for customer in customers {
-    let data = json!({"customer": customer});
-    let pdf = cached_template.render(&data)?;
-    // Template compilation is cached automatically
-}
-```
 
-### Environment Configuration
+## 🎯 Use Cases
 
-Copy `.env.example` to `.env` and configure:
+- **📑 Document Generation APIs** - Invoices, contracts, reports
+- **📧 Email Templates** - Marketing campaigns, notifications
+- **📋 Form Processing** - Applications, certificates, labels
+- **📊 Report Automation** - Analytics dashboards, financial reports
+
+
+## 🤝 Contributing
 
 ```bash
-# Database
-DATABASE_URL=sqlite:./data/papermake.db
-
-# S3 Storage
-S3_ACCESS_KEY_ID=minioadmin
-S3_SECRET_ACCESS_KEY=minioadmin
-S3_ENDPOINT_URL=http://localhost:9000
-S3_BUCKET=papermake-dev
-
-# Server
-HOST=0.0.0.0
-PORT=3000
+git clone https://github.com/rkstgr/papermake
+cd papermake
+cargo test
 ```
 
-## Project Structure
+Built with Rust 🦀 • Powered by [Typst](https://typst.app/) • Inspired by Docker registry & Git's content addressing
 
-- **`papermake/`** - Core PDF generation library
-- **`papermake-registry/`** - Template versioning and storage
-- **`papermake-server/`** - HTTP API server with background workers
+---
 
-## Contributing
-
-Contributions welcome! Please submit a Pull Request.
+**Documentation** (coming soon)
