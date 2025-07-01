@@ -1,4 +1,46 @@
 services:
+  # Papermake Server - Template registry HTTP API
+  papermake-server:
+    build:
+      context: .
+      dockerfile: crates/papermake-server/Dockerfile
+    container_name: papermake-server
+    ports:
+      - "3000:3000"
+    environment:
+      # Server configuration
+      HOST: "0.0.0.0"
+      PORT: "3000"
+
+      # S3 Storage configuration (MinIO)
+      S3_ENDPOINT_URL: "http://minio:9000"
+      S3_REGION: "us-east-1"
+      S3_BUCKET: "papermake-templates"
+      S3_ACCESS_KEY_ID: "minioadmin"
+      S3_SECRET_ACCESS_KEY: "minioadmin"
+
+      # ClickHouse configuration
+      CLICKHOUSE_URL: "http://clickhouse:8123"
+      CLICKHOUSE_DATABASE: "papermake"
+      CLICKHOUSE_USER: "papermake"
+      CLICKHOUSE_PASSWORD: "papermake123"
+
+      # Optional: Enable debug logging
+      RUST_LOG: "papermake_server=debug,papermake_registry=debug"
+    depends_on:
+      minio:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - papermake
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 2s
+      timeout: 10s
+      retries: 3
+
   # MinIO S3-compatible object storage
   minio:
     image: minio/minio:latest
@@ -17,8 +59,8 @@ services:
       - papermake
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
+      interval: 2s
+      timeout: 10s
       retries: 3
 
   # ClickHouse for analytics and render history
@@ -47,7 +89,7 @@ services:
           "--spider",
           "http://localhost:8123/ping",
         ]
-      interval: 30s
+      interval: 2s
       timeout: 10s
       retries: 3
 

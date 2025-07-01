@@ -76,7 +76,7 @@ async fn main() -> Result<()> {
 
     // Start background render worker
     // worker::spawn_render_worker(state.clone(), job_receiver); TODO: enable
-    info!("🔧 Background render worker started");
+    // info!("🔧 Background render worker started");
 
     // Build router
     let app = create_router(state);
