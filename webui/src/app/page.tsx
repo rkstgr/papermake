@@ -6,8 +6,6 @@ import { Badge } from "@/ui/components/Badge";
 import { FeatherArrowUp } from "@subframe/core";
 import { FeatherArrowDown } from "@subframe/core";
 import { FeatherPlus } from "@subframe/core";
-import { ToggleGroup } from "@/ui/components/ToggleGroup";
-import { AreaChart } from "@/ui/components/AreaChart";
 import { TextField } from "@/ui/components/TextField";
 import { FeatherSearch } from "@subframe/core";
 import { Table } from "@/ui/components/Table";
@@ -20,32 +18,67 @@ import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
 import { FeatherBarChart2 } from "@subframe/core";
 import {
-  analyticsApi,
   renderApi,
   templateApi,
   formatLatency,
   formatRelativeTime,
   formatFileSize,
 } from "@/lib/api";
-import {
-  DashboardMetrics,
-  RenderJobSummary,
-  TemplateSummary,
-} from "@/lib/types";
+import { RenderRecord, TemplateInfo } from "@/lib/types";
+import NewTemplateModal from "@/components/NewTemplateModal";
 
 function RenderInsightsHub() {
-  const [dashboardData, setDashboardData] = useState<DashboardMetrics | null>(
-    null,
-  );
+  const [recentRenders, setRecentRenders] = useState<RenderRecord[]>([]);
+  const [templates, setTemplates] = useState<TemplateInfo[]>([]);
+  const [totalRenders24h, setTotalRenders24h] = useState(0);
+  const [p90Latency, setP90Latency] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [newTemplateModalOpen, setNewTemplateModalOpen] = useState(false);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
       try {
         setLoading(true);
-        const data = await analyticsApi.getDashboard();
-        setDashboardData(data);
+
+        // Fetch real render data from the API
+        try {
+          const rendersResponse = await renderApi.list({ limit: 50 });
+          const renderData = rendersResponse.data;
+          console.log(renderData);
+          setRecentRenders(renderData);
+
+          // Calculate metrics from render data
+          const last24h = Date.now() - 24 * 60 * 60 * 1000;
+          const renders24h = renderData.filter(
+            (r) => new Date(r.timestamp).getTime() > last24h,
+          );
+          setTotalRenders24h(renders24h.length);
+
+          // Calculate P90 latency from recent renders
+          if (renderData.length > 0) {
+            const sortedDurations = renderData
+              .map((r) => r.duration_ms)
+              .sort((a, b) => a - b);
+            const p90Index = Math.floor(sortedDurations.length * 0.9);
+            setP90Latency(sortedDurations[p90Index] || null);
+          }
+        } catch (renderErr) {
+          console.warn("Failed to fetch render data:", renderErr);
+          setRecentRenders([]);
+          setTotalRenders24h(0);
+          setP90Latency(null);
+        }
+
+        // Fetch real template data from the API
+        try {
+          const recentTemplates = await templateApi.list({ limit: 10 });
+          setTemplates(recentTemplates.data);
+        } catch (templateErr) {
+          console.warn("Failed to fetch template data:", templateErr);
+          setTemplates([]);
+        }
+
         setError(null);
       } catch (err) {
         console.error("Failed to fetch dashboard data:", err);
@@ -68,13 +101,11 @@ function RenderInsightsHub() {
     );
   }
 
-  if (error || !dashboardData) {
+  if (error) {
     return (
       <DefaultPageLayout>
         <div className="container max-w-none flex h-full w-full flex-col items-center justify-center">
-          <div className="text-lg text-red-600">
-            {error || "Failed to load data"}
-          </div>
+          <div className="text-lg text-red-600">{error}</div>
         </div>
       </DefaultPageLayout>
     );
@@ -98,7 +129,7 @@ function RenderInsightsHub() {
             </span>
             <div className="flex w-full flex-col items-start gap-2">
               <span className="text-heading-2 font-heading-2 text-default-font">
-                {dashboardData.total_renders_24h.toLocaleString()}
+                {totalRenders24h.toLocaleString()}
               </span>
               <Badge variant="success" icon={<FeatherArrowUp />}>
                 24h total
@@ -111,9 +142,7 @@ function RenderInsightsHub() {
             </span>
             <div className="flex w-full flex-col items-start gap-2">
               <span className="text-heading-2 font-heading-2 text-default-font">
-                {dashboardData.p90_latency_ms
-                  ? formatLatency(dashboardData.p90_latency_ms)
-                  : "N/A"}
+                {p90Latency ? formatLatency(p90Latency) : "N/A"}
               </span>
               <Badge variant="neutral">P90 latency</Badge>
             </div>
@@ -124,10 +153,10 @@ function RenderInsightsHub() {
             </span>
             <div className="flex w-full flex-col items-start gap-2">
               <span className="text-heading-2 font-heading-2 text-default-font">
-                {dashboardData.popular_templates.length}
+                {templates.length}
               </span>
               <Badge variant="neutral" icon={<FeatherPlus />}>
-                {dashboardData.new_templates.length} new
+                0 new
               </Badge>
             </div>
           </div>
@@ -137,33 +166,12 @@ function RenderInsightsHub() {
             <span className="grow shrink-0 basis-0 text-heading-3 font-heading-3 text-default-font">
               Render Volume
             </span>
-            <ToggleGroup value="" onValueChange={(value: string) => {}}>
-              <ToggleGroup.Item icon={null} value="019b3d5e">
-                24h
-              </ToggleGroup.Item>
-              <ToggleGroup.Item icon={null} value="da58ad72">
-                7d
-              </ToggleGroup.Item>
-              <ToggleGroup.Item icon={null} value="3a340ab5">
-                30d
-              </ToggleGroup.Item>
-            </ToggleGroup>
           </div>
-          <AreaChart
-            className="h-64 w-full flex-none"
-            categories={["Biology", "Business", "Psychology"]}
-            data={[
-              { Year: "2015", Psychology: 120, Business: 110, Biology: 100 },
-              { Year: "2016", Psychology: 130, Business: 95, Biology: 105 },
-              { Year: "2017", Psychology: 115, Business: 105, Biology: 110 },
-              { Year: "2018", Psychology: 125, Business: 120, Biology: 90 },
-              { Year: "2019", Psychology: 110, Business: 130, Biology: 85 },
-              { Year: "2020", Psychology: 135, Business: 100, Biology: 95 },
-              { Year: "2021", Psychology: 105, Business: 115, Biology: 120 },
-              { Year: "2022", Psychology: 140, Business: 125, Biology: 130 },
-            ]}
-            index={"Year"}
-          />
+          <div className="flex h-64 w-full flex-none items-center justify-center border border-dashed border-neutral-border bg-neutral-50 rounded-md">
+            <span className="text-body font-body text-subtext-color">
+              Analytics charts will be implemented soon
+            </span>
+          </div>
         </div>
         <div className="flex w-full flex-col items-start gap-6">
           <div className="flex w-full items-center justify-between">
@@ -195,106 +203,101 @@ function RenderInsightsHub() {
               </Table.HeaderRow>
             }
           >
-            {dashboardData.recent_renders.map((render) => {
-              const getStatusBadge = (status: string) => {
-                switch (status) {
-                  case "completed":
+            {recentRenders.length === 0 ? (
+              <Table.Row>
+                <Table.Cell colSpan={6}>
+                  <div className="flex w-full items-center justify-center py-8">
+                    <span className="text-body font-body text-subtext-color">
+                      No recent renders found
+                    </span>
+                  </div>
+                </Table.Cell>
+              </Table.Row>
+            ) : (
+              recentRenders.map((render) => {
+                const getStatusBadge = (success: boolean) => {
+                  if (success) {
                     return (
                       <Badge variant="success" icon={<FeatherCheckCircle />}>
-                        Complete
+                        Success
                       </Badge>
                     );
-                  case "processing":
-                    return (
-                      <Badge variant="warning" icon={<FeatherClock />}>
-                        Processing
-                      </Badge>
-                    );
-                  case "queued":
-                    return (
-                      <Badge variant="neutral" icon={<FeatherClock />}>
-                        Queued
-                      </Badge>
-                    );
-                  case "failed":
+                  } else {
                     return <Badge variant="error">Failed</Badge>;
-                  default:
-                    return <Badge variant="neutral">{status}</Badge>;
-                }
-              };
-
-              const handleDownload = async () => {
-                if (render.status === "completed" && render.pdf_url) {
-                  try {
-                    const blob = await renderApi.downloadPdf(render.id);
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `${render.template_id}-${render.id}.pdf`;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                  } catch (error) {
-                    console.error("Failed to download PDF:", error);
                   }
-                }
-              };
+                };
 
-              const handleCopyId = async () => {
-                try {
-                  await navigator.clipboard.writeText(render.id);
-                } catch (error) {
-                  console.error("Failed to copy ID:", error);
-                }
-              };
+                const handleDownload = async () => {
+                  if (render.success && render.pdf_hash) {
+                    try {
+                      const blob = await renderApi.downloadPdf(
+                        render.render_id,
+                      );
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = `${render.template_ref}-${render.render_id}.pdf`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      URL.revokeObjectURL(url);
+                    } catch (error) {
+                      console.error("Failed to download PDF:", error);
+                    }
+                  }
+                };
 
-              // Truncate render ID to first 8 characters
-              const truncatedId = render.id.substring(0, 8);
+                const handleCopyId = async () => {
+                  try {
+                    await navigator.clipboard.writeText(render.render_id);
+                  } catch (error) {
+                    console.error("Failed to copy ID:", error);
+                  }
+                };
 
-              return (
-                <Table.Row key={render.id}>
-                  <Table.Cell>
-                    <button
-                      onClick={handleCopyId}
-                      className="text-body text-neutral-500 font-mono"
-                      title={`Click to copy full ID: ${render.id}`}
-                    >
-                      {truncatedId}
-                    </button>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <span className="text-body-bold font-body-bold text-neutral-700">
-                      {render.template_id}
-                    </span>
-                  </Table.Cell>
-                  <Table.Cell>{getStatusBadge(render.status)}</Table.Cell>
-                  <Table.Cell>
-                    <span className="text-body font-body text-neutral-500">
-                      {formatLatency(render.rendering_latency)}
-                    </span>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <span className="text-body font-body text-neutral-500">
-                      {render.completed_at
-                        ? formatRelativeTime(render.completed_at)
-                        : formatRelativeTime(render.created_at)}
-                    </span>
-                  </Table.Cell>
-                  <Table.Cell>
-                    <div className="flex grow shrink-0 basis-0 items-center justify-end">
-                      <IconButton
-                        icon={<FeatherDownload />}
-                        onClick={handleDownload}
-                        disabled={
-                          render.status !== "completed" || !render.pdf_url
-                        }
-                      />
-                    </div>
-                  </Table.Cell>
-                </Table.Row>
-              );
-            })}
+                // Truncate render ID to first 8 characters
+                const truncatedId = render.render_id.substring(24);
+
+                return (
+                  <Table.Row key={render.render_id}>
+                    <Table.Cell>
+                      <button
+                        onClick={handleCopyId}
+                        className="text-body text-neutral-500 font-mono"
+                        title={`Click to copy full ID: ${render.render_id}`}
+                      >
+                        {truncatedId}
+                      </button>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <span className="text-body-bold font-body-bold text-neutral-700">
+                        {render.template_ref}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell>{getStatusBadge(render.success)}</Table.Cell>
+                    <Table.Cell>
+                      <span className="text-body font-body text-neutral-500">
+                        {formatLatency(render.duration_ms)}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <span className="text-body font-body text-neutral-500">
+                        {formatRelativeTime(render.timestamp)}
+                      </span>
+                    </Table.Cell>
+                    <Table.Cell>
+                      <div className="flex grow shrink-0 basis-0 items-center justify-end">
+                        <IconButton
+                          icon={<FeatherDownload />}
+                          onClick={handleDownload}
+                          disabled={!render.success || !render.pdf_hash}
+                        />
+                      </div>
+                    </Table.Cell>
+                  </Table.Row>
+                );
+              })
+            )}
           </Table>
         </div>
         <div className="flex w-full flex-col items-start gap-6 pb-10">
@@ -304,7 +307,7 @@ function RenderInsightsHub() {
             </span>
             <Button
               icon={<FeatherPlus />}
-              onClick={(event: React.MouseEvent<HTMLButtonElement>) => {}}
+              onClick={() => setNewTemplateModalOpen(true)}
             >
               New Template
             </Button>
@@ -315,30 +318,34 @@ function RenderInsightsHub() {
             <Tabs.Item>All Templates</Tabs.Item>
           </Tabs>
           <div className="w-full items-start gap-4 grid grid-cols-3">
-            {dashboardData.popular_templates.slice(0, 3).map((template) => (
-              <div
-                key={template.template_id}
-                className="flex flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4"
-              >
-                <div className="flex w-full items-start justify-between">
-                  <span className="text-body-bold font-body-bold text-default-font">
-                    {template.template_name}
-                  </span>
-                  <Badge variant="success">Active</Badge>
-                </div>
-                <div className="flex items-center gap-2">
-                  <FeatherBarChart2 className="text-body font-body text-subtext-color" />
-                  <span className="text-body font-body text-subtext-color">
-                    {template.uses_24h.toLocaleString()} uses (24h)
-                  </span>
-                </div>
-                <span className="text-caption font-caption text-subtext-color">
-                  Last updated: {formatRelativeTime(template.published_at)}
+            {templates.length === 0 ? (
+              <div className="col-span-3 flex w-full items-center justify-center py-8">
+                <span className="text-body font-body text-subtext-color">
+                  No templates found
                 </span>
               </div>
-            ))}
+            ) : (
+              templates.slice(0, 3).map((template) => (
+                <div
+                  key={template.name}
+                  className="flex flex-col items-start gap-4 rounded-md border border-solid border-neutral-border bg-default-background px-4 py-4"
+                >
+                  <div className="flex w-full items-start justify-between">
+                    <span className="text-body-bold font-body-bold text-default-font">
+                      {template.name}
+                    </span>
+                    <Badge variant="success">Active</Badge>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
+
+        <NewTemplateModal
+          open={newTemplateModalOpen}
+          onOpenChange={setNewTemplateModalOpen}
+        />
       </div>
     </DefaultPageLayout>
   );
