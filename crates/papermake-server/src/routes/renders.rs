@@ -10,7 +10,7 @@ use axum::{
 use crate::{
     AppState,
     error::{ApiError, Result as ApiResult},
-    models::api::{ApiResponse, PaginatedResponse, PaginationQuery},
+    models::api::{PaginatedResponse, PaginationQuery},
 };
 
 use papermake_registry::render_storage::types::RenderRecord;
