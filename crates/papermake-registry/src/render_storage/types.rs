@@ -8,6 +8,7 @@ pub struct RenderRecord {
     /// UUIDv7 for time-sortable, distributed-friendly IDs
     pub render_id: String,
     /// Timestamp when the render was initiated
+    #[serde(with = "time::serde::rfc3339")]
     pub timestamp: OffsetDateTime,
     /// Template reference used for rendering (e.g., "invoice:latest")
     pub template_ref: String,
@@ -128,16 +129,16 @@ pub enum AnalyticsResult {
 pub enum RenderStorageError {
     #[error("Database connection error: {0}")]
     Connection(String),
-    
+
     #[error("Query execution error: {0}")]
     Query(String),
-    
+
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
-    
+
     #[error("Render record not found: {0}")]
     NotFound(String),
-    
+
     #[error("Invalid query parameters: {0}")]
     InvalidQuery(String),
 }
