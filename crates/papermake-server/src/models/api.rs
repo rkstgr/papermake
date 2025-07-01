@@ -1,5 +1,4 @@
 //! Common API types and utilities
-
 use serde::{Deserialize, Serialize};
 
 /// Standard pagination parameters
@@ -7,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct PaginationQuery {
     #[serde(default = "default_limit")]
     pub limit: u32,
-    
+
     #[serde(default)]
     pub offset: u32,
 }
@@ -66,7 +65,7 @@ impl<T> ApiResponse<T> {
             message: None,
         }
     }
-    
+
     pub fn with_message(data: T, message: String) -> Self {
         Self {
             data,
@@ -80,14 +79,17 @@ impl<T> ApiResponse<T> {
 pub struct SearchQuery {
     #[serde(flatten)]
     pub pagination: PaginationQuery,
-    
+
     /// Search term for name/content filtering
+    #[allow(dead_code)]
     pub search: Option<String>,
-    
+
     /// Sort field
+    #[allow(dead_code)]
     pub sort_by: Option<String>,
-    
+
     /// Sort direction
+    #[allow(dead_code)]
     pub sort_order: Option<SortOrder>,
 }
 

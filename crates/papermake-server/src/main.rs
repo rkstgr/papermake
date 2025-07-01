@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::{net::SocketAddr, sync::Arc};
 use tower::ServiceBuilder;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 mod config;
 mod error;
@@ -114,6 +114,7 @@ fn api_routes() -> Router<AppState> {
     Router::new()
         .nest("/templates", routes::templates::router())
         .nest("/render", routes::render::router())
+        .nest("/renders", routes::renders::router())
         .nest("/analytics", routes::analytics::router())
 }
 
