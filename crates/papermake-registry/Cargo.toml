@@ -19,35 +19,24 @@ serde_json = "1.0"
 async-trait = "0.1"
 time = { version = "0.3", features = ["serde", "macros"] }
 thiserror = "1.0"
-uuid = { version = "1.0", features = ["v4", "serde"] }
+uuid = { version = "1.0", features = ["v4", "v7", "serde"] }
+sha2 = "0.10"
 
-# Optional features for different storage backends
+# Optional features
 tokio = { version = "1.0", features = ["fs"], optional = true }
-sqlx = { version = "0.7", features = [
-    "runtime-tokio-rustls",
-    "postgres",
-    "sqlite",
-    "uuid",
-    "time",
-], optional = true }
 
-# New storage backends
-tikv-client = { version = "0.3", optional = true }
+# BlobStorage Backends
 minio = { version = "0.3.0", optional = true }
 futures-util = { version = "0.3", optional = true }
 bytes = { version = "1.0", optional = true }
 
+# RenderStorage Backends
+clickhouse = { version = "0.13", features = ["uuid", "time"], optional = true }
+
 [features]
-default = ["sqlite", "s3"]
-# Primary storage backends
-sqlite = ["sqlx", "tokio"]
+default = ["s3", "clickhouse"]
 s3 = ["minio", "futures-util", "bytes", "tokio"]
-# Alternative storage backends
-tikv = ["tikv-client", "tokio"]
-postgres = ["sqlx", "tokio"]
-# Legacy storage backends  
-fs = ["tokio"]
-# Testing/development
+clickhouse = ["dep:clickhouse", "tokio"]
 memory = []
 
 [dev-dependencies]

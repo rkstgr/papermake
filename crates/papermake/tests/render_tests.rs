@@ -1,24 +1,22 @@
-use papermake::{render_pdf, Schema, Template};
+use std::sync::Arc;
+
+use papermake::{InMemoryFileSystem, render_template};
 use pdf::object::MaybeRef;
 use serde_json::json;
 
 #[test]
 fn test_render_pdf() {
-    // Create a template with the schema
-    let template = Template::new(
-        "test",
-        "Test Template",
-        "#let data = json.decode(sys.inputs.data)\n#set text(font: \"Arial\")\nHello #data.name!",
-        Schema::new()
-    );
-
     // Valid data
     let data = json!({
         "name": "World"
     });
 
     // Render
-    let result = render_pdf(&template, &data, None);
+    let result = render_template(
+        "#set text(font: \"Arial\")\nHello #data.name!".to_string(),
+        Arc::new(InMemoryFileSystem::new()),
+        &data,
+    );
     assert!(result.is_ok());
 
     let pdf_bytes = result.unwrap();
@@ -29,7 +27,6 @@ fn test_render_pdf() {
     let pdf_path = temp_dir.join("test_system_font.pdf");
     std::fs::write(&pdf_path, pdf_bytes.pdf.as_ref().unwrap()).unwrap();
     println!("PDF written to: {}", pdf_path.display());
-
 
     // Verify PDF structure instead of saving to file
     // 1. Check for PDF header
@@ -42,7 +39,7 @@ fn test_render_pdf() {
     // Parse PDF and check for font
     let file = pdf::file::FileOptions::cached().open(&pdf_path).unwrap();
     let mut found_arial = false;
-    
+
     // Check each page's resources for fonts
     if let Ok(page) = file.get_page(0) {
         if let Ok(resources) = page.resources() {
@@ -69,6 +66,6 @@ fn test_render_pdf() {
             }
         }
     }
-    
+
     assert!(found_arial, "PDF should contain Arial font");
 }

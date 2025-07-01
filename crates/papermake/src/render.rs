@@ -1,89 +1,156 @@
 //! PDF rendering functionality
+//!
+//! This module provides the main template rendering functionality,
+//! converting Typst templates with JSON data into PDF documents.
+
+use std::sync::Arc;
 
 use serde::Serialize;
-use typst::WorldExt;
 use typst::World;
+use typst::WorldExt;
 use typst_pdf::PdfOptions;
 
-use crate::error::Result;
-use crate::template::Template;
-use crate::typst::TypstWorld;
-use crate::PapermakeError;
+use crate::RenderFileSystem;
+use crate::error::{CompilationError, PapermakeError, Result};
+use crate::typst::PapermakeWorld;
 
-/// Options for PDF rendering
-#[derive(Debug, Clone)]
-pub struct RenderOptions {
-    /// Paper size (e.g., "a4", "letter")
-    pub paper_size: String,
-    
-    /// Whether to compress the output PDF
-    pub compress: bool,
-}
-
-impl Default for RenderOptions {
-    fn default() -> Self {
-        RenderOptions {
-            paper_size: "a4".to_string(),
-            compress: true,
-        }
-    }
-}
-
-#[derive(Debug, Serialize)]
+/// Individual rendering error with location information
+///
+/// This struct captures detailed information about a single rendering error,
+/// including its location in the source and a descriptive message.
+#[derive(Debug, Serialize, Clone)]
 pub struct RenderError {
+    /// The error message
     pub message: String,
+    /// Starting position in the source
     pub start: usize,
-    pub end: usize
+    /// Ending position in the source
+    pub end: usize,
+    /// Optional file path where the error occurred
+    pub file: Option<String>,
 }
 
 impl std::fmt::Display for RenderError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ({}:{})", self.message, self.start, self.end)
+        match &self.file {
+            Some(file) => write!(f, "{}:{}-{}: {}", file, self.start, self.end, self.message),
+            None => write!(f, "{}:{}: {}", self.start, self.end, self.message),
+        }
     }
 }
 
+/// Result of template rendering operation
+///
+/// Contains either the successfully generated PDF bytes or detailed error information.
+/// Even when PDF generation succeeds, there may be warnings in the errors vector.
 #[derive(Debug, Serialize)]
 pub struct RenderResult {
+    /// The generated PDF bytes (None if compilation failed)
     pub pdf: Option<Vec<u8>>,
+    /// List of compilation errors and warnings
     pub errors: Vec<RenderError>,
+    /// Whether the rendering was successful (PDF was generated)
+    pub success: bool,
 }
 
-/// Render a template with data to a PDF
-pub fn render_pdf(
-    template: &Template,
+/// Render a Typst template to PDF
+///
+/// This is the main public API for template compilation. It takes a template string,
+/// a file system for resolving imports, and JSON data to inject into the template.
+///
+/// # Arguments
+///
+/// * `main_typ` - The main Typst template content as a string
+/// * `file_system` - File system abstraction for resolving imports and assets
+/// * `data` - JSON data to inject into the template
+///
+/// # Returns
+///
+/// Returns a `RenderResult` containing either the PDF bytes (on success) or
+/// detailed error information (on failure).
+///
+/// # Errors
+///
+/// This function can return various errors:
+/// - `DataError` - JSON serialization issues
+/// - `CompilationError` - Typst compilation failures
+/// - `FileSystemError` - File access issues during import resolution
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use papermake::{render_template, typst::InMemoryFileSystem};
+/// use std::sync::Arc;
+///
+/// let template = "Hello #data.name!";
+/// let fs = Arc::new(InMemoryFileSystem::new());
+/// let data = serde_json::json!({ "name": "World" });
+///
+/// let result = render_template(template.to_string(), fs, &data).unwrap();
+/// if result.success {
+///     println!("PDF generated: {} bytes", result.pdf.unwrap().len());
+/// } else {
+///     for error in result.errors {
+///         println!("Error: {}", error);
+///     }
+/// }
+/// ```
+pub fn render_template(
+    main_typ: String,
+    file_system: Arc<dyn RenderFileSystem>,
     data: &serde_json::Value,
-    _options: Option<RenderOptions>,
 ) -> Result<RenderResult> {
-    // Validate data against schema
-    template.validate_data(data)?;
-    
-    let world = TypstWorld::new(
-        template.content.clone(),
-        serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
-    );
+    let data_str = serde_json::to_string(&data)?;
+
+    let world = PapermakeWorld::with_file_system(main_typ, data_str, file_system);
 
     let compile_result = typst::compile(&world);
-    
+
     let mut errors = Vec::new();
     let mut pdf = None;
+    let mut success = false;
 
     match compile_result.output {
         Ok(document) => {
-            pdf = Some(typst_pdf::pdf(&document, &PdfOptions::default()).unwrap());
+            // Compilation succeeded, generate PDF
+            match typst_pdf::pdf(&document, &PdfOptions::default()) {
+                Ok(pdf_bytes) => {
+                    pdf = Some(pdf_bytes);
+                    success = true;
+                }
+                Err(pdf_error) => {
+                    errors.push(RenderError {
+                        message: format!("PDF generation failed: {:?}", pdf_error),
+                        start: 0,
+                        end: 0,
+                        file: None,
+                    });
+                }
+            }
         }
         Err(diagnostics) => {
+            // Compilation failed, collect diagnostic information
             for diagnostic in diagnostics {
                 let span = diagnostic.span;
+                let mut render_error = RenderError {
+                    message: diagnostic.message.to_string(),
+                    start: 0,
+                    end: 0,
+                    file: None,
+                };
+
+                // Try to get source location information
                 if let Some(id) = span.id() {
-                    if let Ok(_file) = world.source(id) {
+                    if let Ok(_source) = world.source(id) {
+                        render_error.file = Some(format!("{:?}", id));
                         if let Some(range) = world.range(span) {
-                            errors.push(RenderError {
-                                message: diagnostic.message.to_string(),
-                                start: range.start,
-                                end: range.end,});
+                            render_error.start = range.start;
+                            render_error.end = range.end;
                         }
                     }
                 }
+
+                errors.push(render_error);
             }
         }
     }
@@ -91,57 +158,97 @@ pub fn render_pdf(
     Ok(RenderResult {
         pdf,
         errors,
+        success,
     })
 }
 
-pub fn render_pdf_with_cache(
-    template: &Template,
-    data: &serde_json::Value,
-    world_cache: Option<&mut TypstWorld>, // Add a cache parameter
-    _options: Option<RenderOptions>,
+/// Render a template with caching support
+///
+/// This function allows reusing a compiled world for multiple renders with different data,
+/// which can improve performance when rendering the same template multiple times.
+///
+/// # Arguments
+///
+/// * `main_typ` - The main Typst template content as a string
+/// * `file_system` - File system abstraction for resolving imports and assets
+/// * `data` - JSON data to inject into the template
+/// * `world_cache` - Optional cached world to reuse (will be updated with new data)
+///
+/// # Returns
+///
+/// Returns a `RenderResult` containing either the PDF bytes or error information.
+///
+/// # Performance Note
+///
+/// When providing a cached world, make sure the template content hasn't changed,
+/// as this function only updates the data, not the template structure.
+pub fn render_template_with_cache(
+    main_typ: String,
+    file_system: Arc<dyn RenderFileSystem>,
+    data: serde_json::Value,
+    world_cache: Option<&mut PapermakeWorld>,
 ) -> Result<RenderResult> {
-    // Validate data against schema
-    template.validate_data(data)?;
-    
-    // Either use the cached world or create a new one
+    let data_str = serde_json::to_string(&data)?;
+
     let world = match world_cache {
         Some(cached_world) => {
-            // Update the inputs in the existing world
-            cached_world.update_data(
-                serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
-            ).map_err(|e| PapermakeError::Rendering(e.to_string()))?;
-            // Make sure to reset tracking state
-            // cached_world.reset(); TODO: Implement this
+            // Update the data in the existing world
+            cached_world.update_data(data_str).map_err(|e| {
+                PapermakeError::Compilation(CompilationError::DataInjection {
+                    reason: format!("Failed to update cached world data: {}", e),
+                })
+            })?;
             cached_world
         }
-        None => &mut TypstWorld::new(
-            template.content.clone(),
-            serde_json::to_string(&data).map_err(|e| PapermakeError::Rendering(e.to_string()))?,
-        ),
+        None => {
+            // Create a new world if no cache is provided
+            return render_template(main_typ, file_system, &data);
+        }
     };
 
+    // Compile with the updated world
     let compile_result = typst::compile(world as &dyn World);
 
     let mut errors = Vec::new();
     let mut pdf = None;
+    let mut success = false;
 
     match compile_result.output {
-        Ok(document) => {
-            pdf = Some(typst_pdf::pdf(&document, &PdfOptions::default()).unwrap());
-        }
+        Ok(document) => match typst_pdf::pdf(&document, &PdfOptions::default()) {
+            Ok(pdf_bytes) => {
+                pdf = Some(pdf_bytes);
+                success = true;
+            }
+            Err(pdf_error) => {
+                errors.push(RenderError {
+                    message: format!("PDF generation failed: {:?}", pdf_error),
+                    start: 0,
+                    end: 0,
+                    file: None,
+                });
+            }
+        },
         Err(diagnostics) => {
             for diagnostic in diagnostics {
                 let span = diagnostic.span;
+                let mut render_error = RenderError {
+                    message: diagnostic.message.to_string(),
+                    start: 0,
+                    end: 0,
+                    file: None,
+                };
+
                 if let Some(id) = span.id() {
-                    if let Ok(_file) = world.source(id) {
+                    if let Ok(_source) = world.source(id) {
+                        render_error.file = Some(format!("{:?}", id));
                         if let Some(range) = world.range(span) {
-                            errors.push(RenderError {
-                                message: diagnostic.message.to_string(),
-                                start: range.start,
-                                end: range.end,});
+                            render_error.start = range.start;
+                            render_error.end = range.end;
                         }
                     }
                 }
+
+                errors.push(render_error);
             }
         }
     }
@@ -149,5 +256,6 @@ pub fn render_pdf_with_cache(
     Ok(RenderResult {
         pdf,
         errors,
+        success,
     })
 }

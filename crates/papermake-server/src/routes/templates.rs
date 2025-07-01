@@ -1,89 +1,125 @@
 //! Template management routes
 
 use crate::{
-    error::{ApiError, Result},
-    models::{
-        ApiResponse, PaginatedResponse, TemplateDetails, TemplateSummary, CreateTemplateRequest,
-        TemplatePreviewRequest, TemplateValidationRequest,
-        TemplateValidationResponse, SearchQuery,
-    },
     AppState,
+    error::{ApiError, Result},
+    models::api::{ApiResponse, PaginatedResponse, SearchQuery},
 };
 use axum::{
-    extract::{Path, Query, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
     Json, Router,
+    extract::{Multipart, Path, Query, State},
+    routing::{get, post},
 };
-use papermake::TemplateBuilder;
-use papermake_registry::{TemplateId, TemplateRegistry};
-use tracing::{debug, error, info};
+use papermake_registry::{
+    TemplateInfo,
+    bundle::{TemplateBundle, TemplateMetadata},
+    reference::Reference,
+};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+/// Query parameters for publishing a template
+#[derive(Debug, Deserialize)]
+pub struct PublishParams {
+    /// Tag for the template (defaults to "latest")
+    #[serde(default = "default_tag")]
+    pub tag: String,
+}
+
+fn default_tag() -> String {
+    "latest".to_string()
+}
+
+/// Response after successfully publishing a template
+#[derive(Debug, Serialize)]
+pub struct PublishResponse {
+    /// Success message
+    pub message: String,
+    /// The manifest hash of the published template
+    pub manifest_hash: String,
+    /// Template reference for future use
+    pub reference: String,
+}
+
+/// Simplified request for publishing a template with JSON payload
+#[derive(Debug, Deserialize)]
+pub struct PublishSimpleRequest {
+    /// Main template file content (UTF-8 string)
+    pub main_typ: String,
+    /// Optional JSON schema as object
+    pub schema: Option<serde_json::Value>,
+    /// Template metadata
+    pub metadata: TemplateMetadata,
+}
+
+/// Template metadata response for API
+#[derive(Debug, Serialize)]
+pub struct TemplateMetadataResponse {
+    /// Template name
+    pub name: String,
+    /// Optional namespace
+    pub namespace: Option<String>,
+    /// Current tag being viewed
+    pub tag: String,
+    /// Available tags
+    pub tags: Vec<String>,
+    /// Manifest hash
+    pub manifest_hash: String,
+    /// Template metadata
+    pub metadata: TemplateMetadata,
+    /// Full template reference
+    pub reference: String,
+}
 
 /// Create template routes
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/", get(list_templates).post(create_template))
-        .route("/{template_id}", get(get_template))
-        .route("/{template_id}/versions", get(list_template_versions))
-        .route("/{template_id}/versions/{version}", get(get_template_version))
-        // Draft endpoints (by template name)
-        .route("/{template_name}/draft", get(get_draft).put(save_draft).delete(delete_draft))
-        .route("/{template_name}/draft/publish", post(publish_draft))
-        .route("/preview", post(preview_template))
-        .route("/validate", post(validate_template))
+        .route("/", get(list_templates))
+        .route("/{name}/publish", post(publish_template))
+        .route("/{name}/publish-simple", post(publish_template_simple))
+        .route("/{name}/tags", get(list_template_tags))
+        .route("/{reference}", get(get_template_metadata))
 }
 
-/// List all templates with pagination and search
-async fn list_templates(
+/// List all templates in the registry
+///
+/// GET /api/templates
+/// Query parameters:
+/// - limit: Maximum number of templates to return (default: 50)
+/// - offset: Number of templates to skip (default: 0)
+/// - search: Search term to filter templates by name
+pub async fn list_templates(
     State(state): State<AppState>,
     Query(query): Query<SearchQuery>,
-) -> Result<Json<PaginatedResponse<TemplateSummary>>> {
-    debug!("Listing templates with query: {:?}", query);
+) -> Result<Json<PaginatedResponse<TemplateInfo>>> {
+    let templates = state.registry.list_templates().await?;
 
-    // For now, get all templates and apply basic filtering
-    // In production, this should be done at the database level
-    let templates = state.registry.list_templates().await
-        .map_err(|e| {
-            error!("Failed to list templates: {}", e);
-            e
-        })?;
-    
     // Apply search filter if provided
-    let filtered_templates: Vec<_> = if let Some(search_term) = &query.search {
-        templates
-            .into_iter()
-            .filter(|t| {
-                t.template.name.to_lowercase().contains(&search_term.to_lowercase())
-                    || t.template.id.to_string().to_lowercase().contains(&search_term.to_lowercase())
-            })
-            .collect()
-    } else {
-        templates
-    };
+    // let filtered_templates: Vec<TemplateInfo> = if let Some(search_term) = &query.search {
+    //     let search_lower = search_term.to_lowercase();
+    //     templates
+    //         .into_iter()
+    //         .filter(|template| template.full_name().to_lowercase().contains(&search_lower))
+    //         .collect()
+    // } else {
+    //     templates
+    // };
+
+    let filtered_templates = templates;
 
     // Apply pagination
     let total = filtered_templates.len() as u32;
-    let start = query.pagination.offset as usize;
-    let end = (start + query.pagination.limit as usize).min(filtered_templates.len());
-    let page_templates = filtered_templates[start..end].to_vec();
+    let offset = query.pagination.offset as usize;
+    let limit = query.pagination.limit as usize;
 
-    // Convert to summary format
-    // Note: In production, we'd get usage stats from analytics
-    let summaries: Vec<TemplateSummary> = page_templates
+    let paginated_templates: Vec<TemplateInfo> = filtered_templates
         .into_iter()
-        .map(|vt| TemplateSummary {
-            id: vt.template.id,
-            name: vt.template.name,
-            latest_version: vt.version,
-            uses_24h: 0, // TODO: Get from analytics
-            published_at: vt.published_at,
-            author: vt.author,
-        })
+        .skip(offset)
+        .take(limit)
         .collect();
 
     let response = PaginatedResponse::new(
-        summaries,
+        paginated_templates,
         query.pagination.limit,
         query.pagination.offset,
         Some(total),
@@ -92,227 +128,261 @@ async fn list_templates(
     Ok(Json(response))
 }
 
-/// Get a specific template (latest version)
-async fn get_template(
+/// Publish a new template or update an existing template with a new tag
+///
+/// POST /api/templates/{name}/publish?tag=latest
+/// Content-Type: multipart/form-data
+///
+/// Form fields:
+/// - main_typ: The main template file (required)
+/// - metadata: JSON metadata with name and author (required)
+/// - schema: Optional JSON schema file
+/// - files[]: Additional template files (optional, multiple)
+pub async fn publish_template(
     State(state): State<AppState>,
-    Path(template_id): Path<TemplateId>,
-) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template: {:?}", template_id);
+    Path(name): Path<String>,
+    Query(params): Query<PublishParams>,
+    mut multipart: Multipart,
+) -> Result<Json<ApiResponse<PublishResponse>>> {
+    let mut main_typ: Option<Vec<u8>> = None;
+    let mut metadata: Option<TemplateMetadata> = None;
+    let mut schema: Option<Vec<u8>> = None;
+    let mut files: HashMap<String, Vec<u8>> = HashMap::new();
 
-    let template = state.registry.get_latest_template(&template_id).await?;
-    let details = TemplateDetails::from(template);
+    // Parse multipart form data
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::bad_request(&format!("Failed to parse multipart data: {}", e)))?
+    {
+        let field_name = field.name().unwrap_or("").to_string();
+        let data = field.bytes().await.map_err(|e| {
+            ApiError::bad_request(&format!("Failed to read field '{}': {}", field_name, e))
+        })?;
 
-    Ok(Json(ApiResponse::new(details)))
-}
-
-/// Create a new template
-async fn create_template(
-    State(state): State<AppState>,
-    Json(request): Json<CreateTemplateRequest>,
-) -> Result<impl IntoResponse> {
-    info!("Creating new template: {:?}", request.id);
-
-    // Build template using papermake's builder
-    let template = TemplateBuilder::new(request.id.clone())
-        .name(request.name)
-        .description(request.description.unwrap_or_default())
-        .content(request.content)
-        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
-        .build()
-        .map_err(|e| ApiError::validation(&e.to_string()))?;
-
-    // Publish template to registry
-    let versioned_template = state
-        .registry
-        .publish_template(template, request.author)
-        .await?;
-
-    let details = TemplateDetails::from(versioned_template);
-
-    Ok((StatusCode::CREATED, Json(ApiResponse::new(details))))
-}
-
-/// List all versions of a template
-async fn list_template_versions(
-    State(state): State<AppState>,
-    Path(template_id): Path<TemplateId>,
-) -> Result<Json<ApiResponse<Vec<u64>>>> {
-    debug!("Listing versions for template: {:?}", template_id);
-
-    let versions = state.registry.list_versions(&template_id).await?;
-
-    Ok(Json(ApiResponse::new(versions)))
-}
-
-/// Get a specific version of a template
-async fn get_template_version(
-    State(state): State<AppState>,
-    Path((template_id, version)): Path<(TemplateId, u64)>,
-) -> Result<Json<ApiResponse<TemplateDetails>>> {
-    debug!("Getting template {:?} version {}", template_id, version);
-
-    let template = state.registry.get_template(&template_id, version).await?;
-    let details = TemplateDetails::from(template);
-
-    Ok(Json(ApiResponse::new(details)))
-}
-
-
-/// Preview a template without storing it
-async fn preview_template(
-    State(_state): State<AppState>,
-    Json(request): Json<TemplatePreviewRequest>,
-) -> Result<Response> {
-    debug!("Previewing template");
-
-    // Create temporary template
-    let template = TemplateBuilder::new("preview".into())
-        .name("Preview")
-        .content(request.content)
-        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
-        .build()
-        .map_err(|e| ApiError::validation(&e.to_string()))?;
-
-    // Render directly without creating a render job
-    let render_result = papermake::render::render_pdf(&template, &request.data, None)
-        .map_err(|e| ApiError::RenderFailed(e.to_string()))?;
-
-    if let Some(pdf_data) = render_result.pdf {
-        Ok(Response::builder()
-            .header("content-type", "application/pdf")
-            .header("content-length", pdf_data.len())
-            .header("cache-control", "no-cache")
-            .body(axum::body::Body::from(pdf_data))
-            .unwrap())
-    } else {
-        error!("Template preview failed: {:?}", render_result.errors);
-        Err(ApiError::RenderFailed(format!(
-            "Template compilation failed: {:?}",
-            render_result.errors
-        )))
-    }
-}
-
-/// Validate a template
-async fn validate_template(
-    Json(request): Json<TemplateValidationRequest>,
-) -> Result<Json<ApiResponse<TemplateValidationResponse>>> {
-    debug!("Validating template");
-
-    // Try to build the template to validate syntax
-    let mut builder = TemplateBuilder::new("validation".into())
-        .name("Validation")
-        .content(request.content);
-
-    if let Some(schema) = request.schema {
-        builder = builder.schema(papermake::Schema::from_value(schema));
-    }
-
-    let template_result = builder.build();
-
-    match template_result {
-        Ok(template) => {
-            // If data is provided, try to validate against schema
-            let mut errors = Vec::new();
-            
-            if let Some(data) = request.data {
-                if let Err(e) = template.validate_data(&data) {
-                    errors.push(crate::models::ValidationError {
-                        message: e.to_string(),
-                        line: None,
-                        column: None,
-                    });
+        match field_name.as_str() {
+            "main_typ" => {
+                main_typ = Some(data.to_vec());
+            }
+            "metadata" => {
+                let metadata_str = String::from_utf8(data.to_vec())
+                    .map_err(|_| ApiError::bad_request("Metadata must be valid UTF-8"))?;
+                metadata = Some(serde_json::from_str(&metadata_str).map_err(|e| {
+                    ApiError::bad_request(&format!("Invalid metadata JSON: {}", e))
+                })?);
+            }
+            "schema" => {
+                schema = Some(data.to_vec());
+            }
+            field_name if field_name.starts_with("files[") => {
+                // Extract filename from field name like "files[components/header.typ]"
+                if let Some(filename) = extract_filename_from_field(&field_name) {
+                    files.insert(filename, data.to_vec());
                 }
             }
-
-            let response = TemplateValidationResponse {
-                valid: errors.is_empty(),
-                errors,
-                warnings: Vec::new(), // Could add warnings for best practices
-            };
-
-            Ok(Json(ApiResponse::new(response)))
-        }
-        Err(e) => {
-            let response = TemplateValidationResponse {
-                valid: false,
-                errors: vec![crate::models::ValidationError {
-                    message: e.to_string(),
-                    line: None,
-                    column: None,
-                }],
-                warnings: Vec::new(),
-            };
-
-            Ok(Json(ApiResponse::new(response)))
+            _ => {
+                // Ignore unknown fields
+            }
         }
     }
+
+    // Validate required fields
+    let main_typ =
+        main_typ.ok_or_else(|| ApiError::bad_request("Missing required field: main_typ"))?;
+
+    let metadata =
+        metadata.ok_or_else(|| ApiError::bad_request("Missing required field: metadata"))?;
+
+    // Create template bundle
+    let mut bundle = TemplateBundle::new(main_typ, metadata);
+
+    // Add schema if provided
+    if let Some(schema_data) = schema {
+        bundle = bundle.with_schema(schema_data);
+    }
+
+    // Add additional files
+    for (filename, file_data) in files {
+        bundle = bundle.add_file(filename, file_data);
+    }
+
+    // Validate bundle before publishing
+    bundle
+        .validate()
+        .map_err(|e| ApiError::bad_request(&format!("Template validation failed: {}", e)))?;
+
+    // Publish the template
+    let manifest_hash = state.registry.publish(bundle, &name, &params.tag).await?;
+
+    let reference = format!("{}:{}", name, params.tag);
+    let response_data = PublishResponse {
+        message: format!("Template '{}' published successfully", reference),
+        manifest_hash,
+        reference: reference.clone(),
+    };
+
+    Ok(Json(ApiResponse::with_message(
+        response_data,
+        format!("Template published with reference '{}'", reference),
+    )))
 }
 
-// === Draft Management Endpoints ===
-
-/// Get a draft template by name
-async fn get_draft(
+/// Publish a template with simplified JSON payload (no multipart)
+///
+/// POST /api/templates/{name}/publish-simple?tag=latest
+/// Content-Type: application/json
+///
+/// JSON body:
+/// {
+///   "main_typ": "template content as string",
+///   "schema": { "optional": "json schema object" },
+///   "metadata": { "name": "template name", "author": "author email" }
+/// }
+pub async fn publish_template_simple(
     State(state): State<AppState>,
-    Path(template_name): Path<String>,
-) -> Result<Json<ApiResponse<Option<TemplateDetails>>>> {
-    debug!("Getting draft for template: {}", template_name);
+    Path(name): Path<String>,
+    Query(params): Query<PublishParams>,
+    Json(request): Json<PublishSimpleRequest>,
+) -> Result<Json<ApiResponse<PublishResponse>>> {
+    // Convert main_typ string to bytes
+    let main_typ = request.main_typ.into_bytes();
 
-    let draft = state.registry.get_draft(&template_name).await?;
-    let details = draft.map(TemplateDetails::from);
+    // Create template bundle
+    let mut bundle = TemplateBundle::new(main_typ, request.metadata);
 
-    Ok(Json(ApiResponse::new(details)))
+    // Add schema if provided
+    if let Some(schema_value) = request.schema {
+        let schema_bytes = serde_json::to_vec(&schema_value)
+            .map_err(|e| ApiError::bad_request(&format!("Failed to serialize schema: {}", e)))?;
+        bundle = bundle.with_schema(schema_bytes);
+    }
+
+    // Validate bundle before publishing
+    bundle
+        .validate()
+        .map_err(|e| ApiError::bad_request(&format!("Template validation failed: {}", e)))?;
+
+    // Publish the template
+    let manifest_hash = state.registry.publish(bundle, &name, &params.tag).await?;
+
+    let reference = format!("{}:{}", name, params.tag);
+    let response_data = PublishResponse {
+        message: format!("Template '{}' published successfully", reference),
+        manifest_hash,
+        reference: reference.clone(),
+    };
+
+    Ok(Json(ApiResponse::with_message(
+        response_data,
+        format!("Template published with reference '{}'", reference),
+    )))
 }
 
-/// Save a draft template
-async fn save_draft(
+/// List all tags for a specific template
+///
+/// GET /api/templates/{name}/tags
+pub async fn list_template_tags(
     State(state): State<AppState>,
-    Path(template_name): Path<String>,
-    Json(request): Json<CreateTemplateRequest>,
-) -> Result<impl IntoResponse> {
-    info!("Saving draft for template: {}", template_name);
+    Path(name): Path<String>,
+) -> Result<Json<ApiResponse<Vec<String>>>> {
+    let templates = state.registry.list_templates().await?;
 
-    // Build template using papermake's builder
-    let template = TemplateBuilder::new(request.id.clone())
-        .name(request.name.clone())
-        .description(request.description.unwrap_or_default())
-        .content(request.content)
-        .schema(papermake::Schema::from_value(request.schema.unwrap_or(serde_json::Value::Null)))
-        .build()
-        .map_err(|e| ApiError::validation(&e.to_string()))?;
+    // Find the template by name (considering both namespaced and non-namespaced)
+    let template = templates
+        .iter()
+        .find(|t| t.name == name || t.full_name() == name)
+        .ok_or_else(|| ApiError::template_not_found(&name))?;
 
-    // Save as draft
-    let draft_template = state
-        .registry
-        .save_draft(template, template_name, request.name, request.author)
-        .await?;
-
-    let details = TemplateDetails::from(draft_template);
-
-    Ok((StatusCode::OK, Json(ApiResponse::new(details))))
+    Ok(Json(ApiResponse::new(template.tags.clone())))
 }
 
-/// Delete a draft template
-async fn delete_draft(
+/// Get metadata for a specific template reference
+///
+/// GET /api/templates/{reference}
+///
+/// The reference can be:
+/// - name (defaults to latest tag)
+/// - name:tag
+/// - namespace/name
+/// - namespace/name:tag
+pub async fn get_template_metadata(
     State(state): State<AppState>,
-    Path(template_name): Path<String>,
-) -> Result<impl IntoResponse> {
-    info!("Deleting draft for template: {}", template_name);
+    Path(reference): Path<String>,
+) -> Result<Json<ApiResponse<TemplateMetadataResponse>>> {
+    // Parse the reference
+    let parsed_ref = reference.parse::<Reference>().map_err(|e| {
+        ApiError::bad_request(&format!(
+            "Invalid template reference '{}': {}",
+            reference, e
+        ))
+    })?;
 
-    state.registry.delete_draft(&template_name).await?;
+    // Resolve the template to get manifest hash
+    let manifest_hash = state.registry.resolve(&reference).await?;
 
-    Ok((StatusCode::NO_CONTENT, ()))
+    // Get all templates to find the one that matches
+    let templates = state.registry.list_templates().await?;
+    let template = templates
+        .iter()
+        .find(|t| {
+            let template_matches = t.name == parsed_ref.name && t.namespace == parsed_ref.namespace;
+            template_matches
+        })
+        .ok_or_else(|| ApiError::template_not_found(&reference))?;
+
+    let tag = parsed_ref.tag_or_default();
+    let response_data = TemplateMetadataResponse {
+        name: template.name.clone(),
+        namespace: template.namespace.clone(),
+        tag: tag.to_string(),
+        tags: template.tags.clone(),
+        manifest_hash,
+        metadata: template.metadata.clone(),
+        reference: format!("{}:{}", template.full_name(), tag),
+    };
+
+    Ok(Json(ApiResponse::new(response_data)))
 }
 
-/// Publish a draft as a new version
-async fn publish_draft(
-    State(state): State<AppState>,
-    Path(template_name): Path<String>,
-) -> Result<impl IntoResponse> {
-    info!("Publishing draft for template: {}", template_name);
+/// Extract filename from multipart field name like "files[components/header.typ]"
+fn extract_filename_from_field(field_name: &str) -> Option<String> {
+    if field_name.starts_with("files[") && field_name.ends_with(']') {
+        let filename = &field_name[6..field_name.len() - 1]; // Remove "files[" and "]"
+        if !filename.is_empty() {
+            return Some(filename.to_string());
+        }
+    }
+    None
+}
 
-    let published_template = state.registry.publish_draft(&template_name).await?;
-    let details = TemplateDetails::from(published_template);
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    Ok((StatusCode::CREATED, Json(ApiResponse::new(details))))
+    #[test]
+    fn test_extract_filename_from_field() {
+        assert_eq!(
+            extract_filename_from_field("files[main.typ]"),
+            Some("main.typ".to_string())
+        );
+
+        assert_eq!(
+            extract_filename_from_field("files[components/header.typ]"),
+            Some("components/header.typ".to_string())
+        );
+
+        assert_eq!(
+            extract_filename_from_field("files[assets/images/logo.png]"),
+            Some("assets/images/logo.png".to_string())
+        );
+
+        assert_eq!(extract_filename_from_field("files[]"), None);
+        assert_eq!(extract_filename_from_field("other_field"), None);
+        assert_eq!(extract_filename_from_field("files["), None);
+    }
+
+    #[test]
+    fn test_default_tag() {
+        assert_eq!(default_tag(), "latest");
+    }
 }

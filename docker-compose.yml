@@ -1,12 +1,11 @@
 services:
-
   # MinIO S3-compatible object storage
   minio:
     image: minio/minio:latest
     container_name: papermake-minio
     ports:
-      - "9000:9000"  # API
-      - "9001:9001"  # Console
+      - "9000:9000" # API
+      - "9001:9001" # Console
     volumes:
       - minio_data:/data
     environment:
@@ -22,25 +21,39 @@ services:
       timeout: 20s
       retries: 3
 
-  # MinIO client for bucket initialization
-  minio-init:
-    image: minio/mc:latest
-    container_name: papermake-minio-init
-    depends_on:
-      - minio
+  # ClickHouse for analytics and render history
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: papermake-clickhouse
+    ports:
+      - "8123:8123" # HTTP interface
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse-init:/docker-entrypoint-initdb.d
+    environment:
+      CLICKHOUSE_DB: papermake
+      CLICKHOUSE_USER: papermake
+      CLICKHOUSE_PASSWORD: papermake123
+    restart: unless-stopped
     networks:
       - papermake
-    entrypoint: >
-      /bin/sh -c "
-      sleep 10;
-      mc alias set minio http://minio:9000 minioadmin minioadmin;
-      mc mb minio/papermake-dev --ignore-existing;
-      mc mb minio/papermake-test --ignore-existing;
-      echo 'Buckets created successfully';
-      "
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8123/ping",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   minio_data:
+  clickhouse_data:
 
 networks:
   papermake:

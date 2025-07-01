@@ -1,10 +1,10 @@
 // API Types for Papermake Server Integration
 
 // Common types
-export type RenderStatus = 'queued' | 'processing' | 'completed' | 'failed';
-export type SortOrder = 'asc' | 'desc';
-export type TimePeriod = 'hour' | 'day' | 'week' | 'month';
-export type HealthStatus = 'healthy' | 'warning' | 'critical';
+export type RenderStatus = "queued" | "processing" | "completed" | "failed";
+export type SortOrder = "asc" | "desc";
+export type TimePeriod = "hour" | "day" | "week" | "month";
+// HealthStatus removed - server analytics not yet implemented
 
 // Pagination
 export interface PaginationQuery {
@@ -37,21 +37,40 @@ export interface SearchQuery extends PaginationQuery {
 
 // Template Types
 export interface TemplateSummary {
-  id: string;
   name: string;
-  latest_version: number;
+  latest_version: string;
   uses_24h: number;
   published_at: string;
   author: string;
 }
 
+export interface TemplateInfo {
+  name: string;
+  namespace: string | null;
+  tags: string[];
+  latest_manifest_hash: string | null;
+  metadata: {
+    name: string;
+    author: string;
+  };
+}
+
+export interface TemplateMetadataResponse {
+  name: string;
+  namespace: string | null;
+  tag: string;
+  tags: string[];
+  manifest_hash: string;
+  metadata: TemplateMetadata;
+  reference: string;
+}
+
 export interface TemplateDetails {
-  id: string;
   name: string;
   description: string | null;
   content: string;
   schema: any | null;
-  version: number;
+  version: string;
   author: string;
   published_at: string;
   uses_total: number;
@@ -59,27 +78,27 @@ export interface TemplateDetails {
 }
 
 export interface TemplateVersion {
-  version: number;
+  version: string; // Changed from number to string
   published_at: string;
   author: string;
   uses_total: number;
 }
 
-export interface CreateTemplateRequest {
-  id: string;
-  name: string;
-  description?: string;
-  content: string;
+export interface PublishTemplateRequest {
+  main_typ: string;
+  metadata: TemplateMetadata;
   schema?: any;
+}
+
+export interface TemplateMetadata {
+  name: string;
   author: string;
 }
 
-export interface UpdateTemplateRequest {
-  name?: string;
-  description?: string;
-  content?: string;
-  schema?: any;
-  author: string;
+export interface PublishResponse {
+  message: string;
+  manifest_hash: string;
+  reference: string;
 }
 
 export interface TemplatePreviewRequest {
@@ -113,21 +132,24 @@ export interface TemplateValidationResponse {
 }
 
 // Render Types
-export interface RenderJobSummary {
-  id: string;
-  template_id: string;
-  template_version: number;
-  status: RenderStatus;
-  created_at: string;
-  completed_at: string | null;
-  rendering_latency: number | null;
-  pdf_url: string | null;
+export interface RenderRecord {
+  render_id: string;
+  timestamp: string;
+  template_ref: string;
+  template_name: string;
+  template_tag: string;
+  manifest_hash: string;
+  data_hash: string;
+  pdf_hash: string;
+  success: boolean;
+  duration_ms: number;
+  pdf_size_bytes: number;
+  error: string | null;
 }
 
 export interface RenderJobDetails {
   id: string;
-  template_id: string;
-  template_version: number;
+  template_ref: string;
   data: any;
   data_hash: string;
   status: RenderStatus;
@@ -145,17 +167,13 @@ export interface RenderOptions {
 }
 
 export interface CreateRenderRequest {
-  template_id: string;
-  template_version: number;
   data: any;
-  options?: RenderOptions;
 }
 
-export interface CreateRenderResponse {
-  id: string;
-  status: RenderStatus;
-  created_at: string;
-  estimated_completion: string | null;
+export interface RenderResponse {
+  render_id: string;
+  pdf_hash: string;
+  duration_ms: number;
 }
 
 export interface BatchRenderRequest {
@@ -184,13 +202,13 @@ export interface RenderJobUpdate {
   pdf_url: string | null;
 }
 
-// Analytics Types
+// Analytics Types (server not yet implemented - placeholder)
 export interface DashboardMetrics {
   queue_depth: number;
   p90_latency_ms: number | null;
   total_renders_24h: number;
   success_rate_24h: number;
-  recent_renders: RenderJobSummary[];
+  recent_renders: RenderRecord[];
   popular_templates: TemplateUsage[];
   new_templates: TemplateSummary[];
 }
@@ -240,14 +258,7 @@ export interface AnalyticsQuery {
   limit?: number;
 }
 
-export interface TemplateAnalytics {
-  template_id: string;
-  template_name: string;
-  total_versions: number;
-  latest_version: number;
-  usage_over_time: UsageDataPoint[];
-  performance_metrics: TemplatePerformanceMetrics;
-}
+// TemplateAnalytics removed - server analytics not yet implemented
 
 export interface UsageDataPoint {
   timestamp: string;
@@ -267,26 +278,29 @@ export interface TemplatePerformanceMetrics {
   cache_hit_rate: number;
 }
 
-export interface SystemHealth {
-  status: HealthStatus;
-  uptime_seconds: number;
-  queue_health: QueueHealth;
-  storage_health: StorageHealth;
-  last_updated: string;
+// SystemHealth removed - server analytics not yet implemented
+
+// QueueHealth and StorageHealth removed - server analytics not yet implemented
+
+// Mock data generation functions (kept for fallback scenarios)
+export function generateMockDashboardMetrics(): DashboardMetrics {
+  return {
+    queue_depth: 0,
+    p90_latency_ms: null,
+    total_renders_24h: 0,
+    success_rate_24h: 0,
+    recent_renders: [],
+    popular_templates: [],
+    new_templates: [],
+  };
 }
 
-export interface QueueHealth {
-  status: HealthStatus;
-  current_depth: number;
-  max_depth_24h: number;
-  processing_rate: number;
-  avg_wait_time_ms: number;
+export function generateMockTemplateUsage(count: number): TemplateUsage[] {
+  return [];
 }
 
-export interface StorageHealth {
-  status: HealthStatus;
-  database_connected: boolean;
-  s3_connected: boolean;
-  database_response_time_ms: number | null;
-  s3_response_time_ms: number | null;
+export function generateMockTemplateSummaries(
+  count: number,
+): TemplateSummary[] {
+  return [];
 }

@@ -8,19 +8,19 @@ use serde::{Deserialize, Serialize};
 pub struct ServerConfig {
     /// Host to bind to
     pub host: String,
-    
+
     /// Port to bind to
     pub port: u16,
-    
+
     /// Maximum number of concurrent render jobs
     pub max_concurrent_renders: usize,
-    
+
     /// Timeout for render jobs in seconds
     pub render_timeout_seconds: u64,
-    
+
     /// CORS allowed origins
     pub cors_origins: Vec<String>,
-    
+
     /// Whether to enable debug logging
     pub debug: bool,
 }
@@ -37,11 +37,15 @@ impl ServerConfig {
             max_concurrent_renders: std::env::var("MAX_CONCURRENT_RENDERS")
                 .unwrap_or_else(|_| "10".to_string())
                 .parse()
-                .map_err(|_| ApiError::Config("Invalid MAX_CONCURRENT_RENDERS value".to_string()))?,
+                .map_err(|_| {
+                    ApiError::Config("Invalid MAX_CONCURRENT_RENDERS value".to_string())
+                })?,
             render_timeout_seconds: std::env::var("RENDER_TIMEOUT_SECONDS")
                 .unwrap_or_else(|_| "300".to_string()) // 5 minutes default
                 .parse()
-                .map_err(|_| ApiError::Config("Invalid RENDER_TIMEOUT_SECONDS value".to_string()))?,
+                .map_err(|_| {
+                    ApiError::Config("Invalid RENDER_TIMEOUT_SECONDS value".to_string())
+                })?,
             cors_origins: std::env::var("CORS_ORIGINS")
                 .unwrap_or_else(|_| "*".to_string())
                 .split(',')

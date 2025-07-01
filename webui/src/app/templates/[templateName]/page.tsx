@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { DefaultPageLayout } from "@/ui/layouts/DefaultPageLayout";
 import { Badge } from "@/ui/components/Badge";
 import { Button } from "@/ui/components/Button";
@@ -22,6 +22,7 @@ import { FeatherChevronDown } from "@subframe/core";
 import { FeatherDownload } from "@subframe/core";
 import { FeatherMaximize2 } from "@subframe/core";
 import { FeatherUpload } from "@subframe/core";
+import { FeatherSend } from "@subframe/core";
 import { FeatherRefreshCw } from "@subframe/core";
 import { PDFViewer } from "@/ui/components/PDFViewer";
 import { 
@@ -31,27 +32,30 @@ import {
   ApiError 
 } from "@/lib/api";
 import { 
-  TemplateDetails, 
-  RenderJobSummary,
-  TemplateValidationResponse 
+  TemplateMetadataResponse, 
+  PublishTemplateRequest,
+  RenderRecord
 } from "@/lib/types";
 
 function TemplateStudio() {
   const params = useParams();
-  const templateId = params.templateId as string;
+  const searchParams = useSearchParams();
+  const templateName = params.templateName as string;
+  const requestedVersion = searchParams.get('version');
+  const isNewTemplate = searchParams.get('new') === 'true';
   
   // State management
-  const [template, setTemplate] = useState<TemplateDetails | null>(null);
+  const [template, setTemplate] = useState<TemplateMetadataResponse | null>(null);
   const [templateContent, setTemplateContent] = useState("");
-  const [recentRenders, setRecentRenders] = useState<RenderJobSummary[]>([]);
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
-  const [validationResult, setValidationResult] = useState<TemplateValidationResponse | null>(null);
+  const [schema, setSchema] = useState<any>(null);
+  const [recentRenders, setRecentRenders] = useState<RenderRecord[]>([]);
   
   // UI state
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [publishing, setPublishing] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   
   // Auto-save timer ref
@@ -64,21 +68,48 @@ function TemplateStudio() {
         setLoading(true);
         setError(null);
         
-        const templateData = await templateApi.get(templateId);
-        setTemplate(templateData);
-        setTemplateContent(templateData.content);
-        
-        // Load recent renders for this template (handle errors gracefully)
-        try {
-          const renders = await renderApi.list({
-            template_id: templateId,
-            limit: 10
-          });
-          setRecentRenders(renders.data);
-        } catch (renderErr) {
-          console.warn("Failed to load recent renders:", renderErr);
-          // Don't fail the whole page load if renders can't be loaded
-          setRecentRenders([]);
+        if (isNewTemplate) {
+          // Create a new template locally
+          const newTemplate: TemplateMetadataResponse = {
+            name: templateName.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+            namespace: null,
+            tag: 'draft',
+            tags: ['draft'],
+            manifest_hash: '',
+            metadata: {
+              name: templateName.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+              author: 'User'
+            },
+            reference: `${templateName}:draft`
+          };
+          setTemplate(newTemplate);
+          
+          // Set initial template content
+          setTemplateContent(`// ${templateName} template
+#set page(paper: "a4", margin: 1in)
+#set text(font: "Arial", size: 12pt)
+
+= Welcome to ${templateName.replace(/[-_]/g, ' ')}
+
+This is your new template. Start editing to customize it for your needs.
+
+You can use variables in your content like this:
+- Name: #name
+- Date: #date
+
+Happy templating!`);
+          setHasUnsavedChanges(true); // Mark as unsaved since it's new
+        } else {
+          // Build reference string
+          const reference = requestedVersion ? `${templateName}:${requestedVersion}` : templateName;
+          
+          // Load template metadata
+          const templateData = await templateApi.get(reference);
+          setTemplate(templateData);
+          
+          // For now, we'll use placeholder content since we don't have a content endpoint
+          // In a real implementation, this would come from the template metadata or a separate endpoint
+          setTemplateContent(`// ${templateName} template\n#set page(paper: "a4", margin: 1in)\n#set text(font: "Arial", size: 12pt)\n\n= ${templateName}\n\nThis is your template content.`);
         }
         
       } catch (err) {
@@ -93,61 +124,80 @@ function TemplateStudio() {
       }
     };
 
-    if (templateId) {
+    if (templateName) {
       loadTemplate();
     }
-  }, [templateId]);
+  }, [templateName, requestedVersion, isNewTemplate]);
 
-  // Auto-save functionality
-  const saveTemplate = useCallback(async () => {
+  // Load recent renders for this template
+  useEffect(() => {
+    const loadRecentRenders = async () => {
+      try {
+        const rendersResponse = await renderApi.list({ limit: 10 });
+        // Filter renders for this template
+        const templateRenders = rendersResponse.data.filter(render => 
+          render.template_name === templateName || render.template_ref === templateName
+        );
+        setRecentRenders(templateRenders);
+      } catch (err) {
+        console.warn("Failed to load recent renders:", err);
+        setRecentRenders([]);
+      }
+    };
+
+    if (templateName && !isNewTemplate) {
+      loadRecentRenders();
+    }
+  }, [templateName, isNewTemplate]);
+
+  // Publish template functionality
+  const publishTemplate = useCallback(async () => {
     if (!template || !hasUnsavedChanges) return;
     
     try {
-      setSaving(true);
-      // Note: Update API would need to be implemented in the server
-      // For now, we'll just validate the content
-      await templateApi.validate({
-        content: templateContent,
-        schema: template.schema
-      });
+      setPublishing(true);
+      
+      const publishRequest: PublishTemplateRequest = {
+        main_typ: templateContent,
+        metadata: {
+          name: template.name,
+          author: template.metadata.author
+        },
+        schema: schema
+      };
+      
+      await templateApi.publishSimple(templateName, publishRequest, 'latest');
       setHasUnsavedChanges(false);
+      
     } catch (err) {
-      console.error("Failed to save template:", err);
+      console.error("Failed to publish template:", err);
     } finally {
-      setSaving(false);
+      setPublishing(false);
     }
-  }, [template, templateContent, hasUnsavedChanges]);
+  }, [template, templateName, templateContent, hasUnsavedChanges, schema]);
 
-  // Content change handler with debounced auto-save
+  // Content change handler
   const handleContentChange = useCallback((newContent: string) => {
     setTemplateContent(newContent);
     setHasUnsavedChanges(true);
-    
-    // Clear existing timer
-    if (autoSaveTimer.current) {
-      clearTimeout(autoSaveTimer.current);
-    }
-    
-    // Set new timer for auto-save
-    autoSaveTimer.current = setTimeout(() => {
-      saveTemplate();
-    }, 2000);
-  }, [saveTemplate]);
+  }, []);
 
-  // Validation handler
-  const handleValidation = useCallback(async () => {
+  // Simple preview using render API
+  const handleRender = useCallback(async () => {
     if (!template) return;
     
     try {
-      const result = await templateApi.validate({
-        content: templateContent,
-        schema: template.schema
-      });
-      setValidationResult(result);
+      const sampleData = generateSampleData();
+      const result = await renderApi.render(templateName, { data: sampleData });
+      
+      // Download the rendered PDF
+      const blob = await renderApi.downloadPdf(result.render_id);
+      setPreviewBlob(blob);
+      
     } catch (err) {
-      console.error("Validation failed:", err);
+      console.error("Render failed:", err);
     }
-  }, [template, templateContent]);
+  }, [template, templateName, generateSampleData]);
 
   // Generate sample data based on template schema or use defaults
   const generateSampleData = useCallback(() => {
@@ -202,42 +252,21 @@ function TemplateStudio() {
     return defaultSampleData;
   }, []);
 
-  // Preview handler
+  // Preview handler (simplified)
   const handlePreview = useCallback(async () => {
     if (!template) return;
     
     try {
       setPreviewing(true);
-      
-      const sampleData = generateSampleData();
-      
-      const blob = await templateApi.preview({
-        content: templateContent,
-        data: sampleData,
-        schema: template.schema
-      });
-      
-      setPreviewBlob(blob);
-      
+      await handleRender();
     } catch (err) {
       console.error("Preview failed:", err);
-      // Don't show the error to user, just log it
-      // Preview failing shouldn't break the editor experience
     } finally {
       setPreviewing(false);
     }
-  }, [template, templateContent, generateSampleData]);
+  }, [template, handleRender]);
 
-  // Auto-preview when content changes (debounced) - only if content is substantial
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      if (templateContent && template && templateContent.length > 50) {
-        handlePreview();
-      }
-    }, 3000); // Increased delay to reduce server load
-    
-    return () => clearTimeout(timer);
-  }, [templateContent, template, handlePreview]);
+  // Auto-preview disabled for now since it requires publishing to render
 
   // Loading state
   if (loading) {
@@ -271,12 +300,16 @@ function TemplateStudio() {
                 <span className="text-heading-2 font-heading-2 text-default-font">
                   {template.name}
                 </span>
-                <Badge variant="success">v{template.version}</Badge>
+                {isNewTemplate ? (
+                  <Badge variant="neutral">New</Badge>
+                ) : (
+                  <Badge variant="success">{template.tag}</Badge>
+                )}
                 {hasUnsavedChanges && <Badge variant="warning">Unsaved</Badge>}
-                {saving && <Badge variant="neutral">Saving...</Badge>}
+                {publishing && <Badge variant="brand">Publishing...</Badge>}
               </div>
               <span className="text-body font-body text-subtext-color">
-                Last updated {formatRelativeTime(template.published_at)} by {template.author}
+                Template by {template.metadata.author}
               </span>
             </div>
             <Button
@@ -290,14 +323,20 @@ function TemplateStudio() {
               variant="neutral-secondary"
               icon={<FeatherRotateCcw />}
               onClick={() => {
-                if (template) {
-                  setTemplateContent(template.content);
-                  setHasUnsavedChanges(false);
-                }
+                // Reset to initial content - would need to fetch from server in real implementation
+                setHasUnsavedChanges(false);
               }}
               disabled={!hasUnsavedChanges}
             >
               Discard changes
+            </Button>
+            <Button
+              variant="brand"
+              icon={<FeatherSend />}
+              onClick={publishTemplate}
+              disabled={publishing || !hasUnsavedChanges}
+            >
+              {publishing ? "Publishing..." : "Publish"}
             </Button>
             <IconButton
               icon={<FeatherSettings2 />}
@@ -311,27 +350,22 @@ function TemplateStudio() {
                   <span className="text-body-bold font-body-bold text-default-font">
                     Template Code
                   </span>
-                  {validationResult && !validationResult.valid && (
-                    <Badge variant="error">{validationResult.errors.length} errors</Badge>
-                  )}
-                  {validationResult && validationResult.warnings.length > 0 && (
-                    <Badge variant="warning">{validationResult.warnings.length} warnings</Badge>
-                  )}
                 </div>
                 <Button
                   variant="neutral-tertiary"
                   size="small"
                   icon={<FeatherCode />}
-                  onClick={handleValidation}
+                  onClick={handlePreview}
+                  disabled={previewing}
                 >
-                  Validate
+                  {previewing ? "Rendering..." : "Test Render"}
                 </Button>
               </div>
               <TextArea
                 className="w-full grow shrink-0 basis-0"
                 variant="filled"
                 label=""
-                helpText={validationResult && !validationResult.valid ? validationResult.errors[0]?.message : ""}
+                helpText=""
               >
                 <TextArea.Input
                   className="min-h-[96px] w-full grow shrink-0 basis-0 font-mono"
@@ -403,10 +437,10 @@ function TemplateStudio() {
                           </div>
                           {recentRenders.slice(0, 5).map((render) => (
                             <DropdownMenu.DropdownItem 
-                              key={render.id} 
+                              key={render.render_id} 
                               icon={<FeatherFile />}
                             >
-                              Render {render.id.substring(0, 8)}
+                              Render {render.render_id.substring(0, 8)}
                             </DropdownMenu.DropdownItem>
                           ))}
                         </DropdownMenu>
@@ -461,14 +495,14 @@ function TemplateStudio() {
         <div className="flex w-full flex-col items-start gap-2 px-1 py-1">
           <div className="flex w-full items-center justify-between border-t border-solid border-neutral-border bg-default-background px-6 py-3">
             <span className="text-caption font-caption text-subtext-color">
-              {saving ? "Saving..." : hasUnsavedChanges ? "Unsaved changes" : `Last saved ${formatRelativeTime(template.published_at)}`}
+              {hasUnsavedChanges ? "Unsaved changes" : `Template: ${template.reference}`}
             </span>
             <Button
               icon={<FeatherUpload />}
-              onClick={saveTemplate}
-              disabled={saving || !hasUnsavedChanges}
+              onClick={publishTemplate}
+              disabled={publishing || !hasUnsavedChanges}
             >
-              {saving ? "Saving..." : "Save"}
+              {publishing ? "Publishing..." : "Publish"}
             </Button>
           </div>
         </div>
