@@ -26,8 +26,6 @@ curl -X POST http://localhost:8080/render/invoice:latest \
 - **📊 Built-in Analytics** - Track usage, performance, and errors
 - **🐳 Self-hostable** - Deploy anywhere with Docker
 
-![Papermake UI](https://github.com/rkstgr/papermake/blob/main/papermake-webui.jpeg?raw=true)
-
 ## 🏃‍♂️ Quick Start
 
 ### Using Docker Compose
