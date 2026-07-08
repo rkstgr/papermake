@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use papermake::{InMemoryFileSystem, render_template};
-use pdf::object::MaybeRef;
 use serde_json::json;
 
 #[test]
@@ -44,22 +43,11 @@ fn test_render_pdf() {
     if let Ok(page) = file.get_page(0) {
         if let Ok(resources) = page.resources() {
             for (_, font_ref) in resources.fonts.iter() {
-                match font_ref {
-                    MaybeRef::Direct(font) => {
-                        if let Some(name) = &font.name {
-                            if name.to_string().to_lowercase().contains("arial") {
-                                found_arial = true;
-                                break;
-                            }
-                        }
-                    }
-                    MaybeRef::Indirect(r) => {
-                        let font = r.data();
-                        if let Some(name) = &font.name {
-                            if name.to_string().to_lowercase().contains("arial") {
-                                found_arial = true;
-                                break;
-                            }
+                if let Ok(font) = font_ref.load(&file.resolver()) {
+                    if let Some(name) = &font.name {
+                        if name.to_string().to_lowercase().contains("arial") {
+                            found_arial = true;
+                            break;
                         }
                     }
                 }
