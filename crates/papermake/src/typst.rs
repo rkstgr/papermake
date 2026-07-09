@@ -273,13 +273,21 @@ impl InMemoryFileSystem {
         }
     }
 
+    /// Typst requests files by rooted virtual paths (`/logo.png`), so strip
+    /// the leading slash on both add and lookup to make them interchangeable.
+    fn normalize_path(path: &str) -> &str {
+        path.strip_prefix('/').unwrap_or(path)
+    }
+
     pub fn add_file<P: AsRef<str>>(&mut self, path: P, content: Vec<u8>) {
-        self.files.insert(path.as_ref().to_string(), content);
+        self.files
+            .insert(Self::normalize_path(path.as_ref()).to_string(), content);
     }
 }
 
 impl RenderFileSystem for InMemoryFileSystem {
     fn get_file(&self, path: &str) -> Result<Vec<u8>, FileError> {
+        let path = Self::normalize_path(path);
         self.files
             .get(path)
             .cloned()
@@ -358,6 +366,42 @@ mod tests {
         let pdf_bytes = render_result.pdf.unwrap();
         assert!(!pdf_bytes.is_empty());
         assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[tokio::test]
+    async fn test_file_paths_with_and_without_leading_slash() {
+        let main_template = r#"
+            #import "/header.typ": make_header
+            #set page(width: 200pt, height: 100pt)
+            #make_header(data.title)
+        "#;
+
+        let header_template = r#"
+            #let make_header(title) = [
+                = #title
+            ]
+        "#;
+
+        // Added without a leading slash, imported with one (Typst rooted path)
+        let mut fs = InMemoryFileSystem::new();
+        fs.add_file("header.typ", header_template.as_bytes().to_vec());
+
+        let data = serde_json::json!({ "title": "My Document" });
+
+        let result = render_template(main_template.to_string(), Arc::new(fs), &data);
+
+        assert!(result.is_ok());
+        let render_result = result.unwrap();
+        assert!(
+            render_result.success,
+            "Render failed: {}",
+            render_result
+                .errors
+                .iter()
+                .map(|e| e.to_string())
+                .collect::<Vec<String>>()
+                .join(", ")
+        );
     }
 
     #[test]
