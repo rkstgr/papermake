@@ -24,7 +24,7 @@
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! // Create a registry with memory storage
 //! let storage = MemoryStorage::new();
-//! let registry = Registry::new(storage);
+//! let registry = Registry::new_storage_only(storage);
 //!
 //! // Create a template bundle
 //! let metadata = TemplateMetadata::new("Invoice Template", "alice@company.com");
