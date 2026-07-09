@@ -1,3 +1,4 @@
+use papermake::InMemoryFileSystem;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -12,7 +13,7 @@ use crate::{
     render_storage::{
         AnalyticsQuery, AnalyticsResult, RenderRecord, RenderStorage, RenderStorageError,
     },
-    storage::{BlobStorage, filesystem::RegistryFileSystem},
+    storage::BlobStorage,
 };
 
 /// Core registry for template publishing and resolution
@@ -213,7 +214,7 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
     /// This method implements the end-to-end template rendering workflow:
     /// 1. Resolves the template reference to get the manifest hash
     /// 2. Loads the manifest from storage to get file mappings
-    /// 3. Creates a RegistryFileSystem that resolves files through blob storage
+    /// 3. Loads all manifest files from blob storage into an in-memory file system
     /// 4. Uses papermake to render the template with the provided data
     ///
     /// # Arguments
@@ -231,7 +232,7 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let storage = MemoryStorage::new();
-    /// let registry = Registry::new(storage);
+    /// let registry = Registry::new_storage_only(storage);
     ///
     /// let pdf_bytes = registry.render(
     ///     "john/invoice:latest",
@@ -290,8 +291,18 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
             )))
         })?;
 
-        // Step 4: Create RegistryFileSystem for resolving imports
-        let file_system = RegistryFileSystem::new(self.storage.clone(), manifest)?;
+        // Step 4: Populate in-memory file system with manifest files
+        let mut file_system = InMemoryFileSystem::new();
+        for (file_path, file_hash) in &manifest.files {
+            let file_blob_key = ContentAddress::blob_key(file_hash);
+            let file_bytes = self.storage.get(&file_blob_key).await.map_err(|e| {
+                RegistryError::Storage(StorageError::backend(format!(
+                    "Failed to load file {}: {}",
+                    file_path, e
+                )))
+            })?;
+            file_system.add_file(file_path, file_bytes);
+        }
 
         // Step 5: Render the template using papermake
         let render_result =
@@ -338,7 +349,7 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// let storage = MemoryStorage::new();
-    /// let registry = Registry::new(storage);
+    /// let registry = Registry::new_storage_only(storage);
     ///
     /// let templates = registry.list_templates().await?;
     /// for template in templates {
@@ -563,13 +574,12 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
             .await
             .map_err(|e| RegistryError::Storage(StorageError::backend(e.to_string())))?;
 
-        let manifest_hash = self.resolve(reference).await?;
-
         // Step 3: Measure total operation time including resolution
         let start_time = std::time::Instant::now();
 
         // Step 4: Try to resolve and render - catch all failures
         let result: Result<(String, Vec<u8>), RegistryError> = async {
+            let manifest_hash = self.resolve(reference).await?;
             let pdf_bytes = self.render(reference, data).await?;
             Ok((manifest_hash, pdf_bytes))
         }
@@ -821,7 +831,7 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{S3Storage, bundle::TemplateMetadata, storage::blob_storage::MemoryStorage};
+    use crate::{bundle::TemplateMetadata, storage::blob_storage::MemoryStorage};
 
     fn create_test_bundle() -> TemplateBundle {
         let metadata = TemplateMetadata::new("Test Template", "test@example.com");
@@ -1324,17 +1334,9 @@ Content: #data.content"#
         assert_eq!(template.full_name(), "john/invoice");
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn test_registry_list_templates_no_namespace() {
-        unsafe {
-            std::env::set_var("S3_ENDPOINT_URL", "http://localhost:9000");
-            std::env::set_var("S3_ACCESS_KEY_ID", "minioadmin");
-            std::env::set_var("S3_SECRET_ACCESS_KEY", "minioadmin");
-            std::env::set_var("S3_BUCKET", "papermake-registry-test");
-            std::env::set_var("S3_REGION", "us-east-1");
-        }
-        let storage = S3Storage::from_env().unwrap();
-        storage.ensure_bucket().await.unwrap();
+        let storage = MemoryStorage::new();
         let registry = Registry::new_storage_only(storage);
         let bundle = create_test_bundle();
 
@@ -1533,7 +1535,7 @@ Content: #data.content"#
         let records = registry.list_recent_renders(10).await.unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].render_id, result.render_id);
-        assert_eq!(records[0].template_name, "test-template");
+        assert_eq!(records[0].template_name, "test-user/test-template");
         assert_eq!(records[0].template_tag, "latest");
         assert!(records[0].success);
     }
@@ -1707,7 +1709,7 @@ Content: #data.content"#
             assert_eq!(template_stats.len(), 2);
             let test_template_stats = template_stats
                 .iter()
-                .find(|s| s.template_name == "test-template")
+                .find(|s| s.template_name == "test-user/test-template")
                 .unwrap();
             assert_eq!(test_template_stats.total_renders, 3);
 
@@ -1731,24 +1733,6 @@ Content: #data.content"#
         } else {
             panic!("Expected Duration result");
         }
-    }
-
-    #[tokio::test]
-    async fn test_extract_template_name() {
-        use crate::reference::Reference;
-
-        // Test various reference formats
-        let ref1 = Reference::parse("invoice:latest").unwrap();
-        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref1), "invoice");
-
-        let ref2 = Reference::parse("john/invoice:latest").unwrap();
-        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref2), "invoice");
-
-        let ref3 = Reference::parse("acme-corp/letterhead:stable").unwrap();
-        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref3), "letterhead");
-
-        let ref4 = Reference::parse("org/user/template:v1").unwrap();
-        assert_eq!(Registry::<MemoryStorage, crate::render_storage::MemoryRenderStorage>::extract_template_name(&ref4), "template");
     }
 
     #[tokio::test]

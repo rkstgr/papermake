@@ -52,10 +52,15 @@ impl<S: BlobStorage + 'static> RenderFileSystem for RegistryFileSystem<S> {
 
         let storage = self.storage.clone(); // Ensure storage is cloneable or use Arc
         let blob_key = blob_key.clone();
-        let handle = self.runtime.clone();
 
-        std::thread::spawn(move || handle.block_on(storage.get(&blob_key)))
+        let handle_clone = self.runtime.clone();
+        let future = handle_clone.spawn(async move {
+            storage.get(&blob_key).await
+        });
+
+        std::thread::spawn(move || handle_clone.block_on(future))
             .join()
+            .map_err(|_| FileError::NotFound(path.into()))?
             .map_err(|_| FileError::NotFound(path.into()))?
             .map_err(|_| FileError::NotFound(path.into()))
     }
