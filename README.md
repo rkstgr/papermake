@@ -51,6 +51,61 @@ cp .env.example .env
 cargo run -r -p papermake-server
 ```
 
+## 🦀 Using the Library
+
+You can also use `papermake` directly as a Rust library, without the server:
+
+```toml
+[dependencies]
+papermake = "0.2"
+```
+
+```rust
+use papermake::{render_template, InMemoryFileSystem};
+use std::sync::Arc;
+
+let template = "Hello #data.name!";
+let fs = Arc::new(InMemoryFileSystem::new());
+let data = serde_json::json!({ "name": "World" });
+
+let result = render_template(template.to_string(), fs, &data)?;
+if result.success {
+    std::fs::write("hello.pdf", result.pdf.unwrap())?;
+}
+```
+
+### Images & other files
+
+Rendering happens against a **virtual file system** — there is no disk access and no
+`--root` directory like the Typst CLI has. Every file your template references
+(images, imports, data files) must be provided through the file system you pass in:
+
+```rust
+let mut fs = InMemoryFileSystem::new();
+fs.add_file("logo.png", std::fs::read("assets/logo.png")?);
+fs.add_file("header.typ", std::fs::read("templates/header.typ")?);
+```
+
+```typst
+#import "header.typ": make_header
+#image("logo.png", width: 40pt)
+```
+
+Paths are matched with or without a leading `/` (`logo.png` and `/logo.png` are
+equivalent), so Typst's rooted paths resolve to the files you added. When publishing
+to the registry, the same applies: upload assets as additional `files[]` and reference
+them by their file name.
+
+### Fonts
+
+System fonts are discovered automatically. To bundle additional fonts (e.g. in a
+container without system fonts), point the optional `FONTS_DIR` environment variable
+at a directory of font files before the first render:
+
+```bash
+FONTS_DIR=./fonts cargo run
+```
+
 ## 📚 Usage
 
 ### Publishing Templates
