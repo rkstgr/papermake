@@ -5,6 +5,14 @@ use serde_json::json;
 
 #[test]
 fn test_render_pdf() {
+    // Use the fonts bundled in the repo so the test doesn't depend on system fonts
+    unsafe {
+        std::env::set_var(
+            "FONTS_DIR",
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../../fonts"),
+        );
+    }
+
     // Valid data
     let data = json!({
         "name": "World"
@@ -12,7 +20,7 @@ fn test_render_pdf() {
 
     // Render
     let result = render_template(
-        "#set text(font: \"Arial\")\nHello #data.name!".to_string(),
+        "#set text(font: \"Linux Libertine\")\nHello #data.name!".to_string(),
         Arc::new(InMemoryFileSystem::new()),
         &data,
     );
@@ -23,7 +31,7 @@ fn test_render_pdf() {
 
     // Write PDF to temp file for manual inspection if needed
     let temp_dir = std::env::temp_dir();
-    let pdf_path = temp_dir.join("test_system_font.pdf");
+    let pdf_path = temp_dir.join("test_bundled_font.pdf");
     std::fs::write(&pdf_path, pdf_bytes.pdf.as_ref().unwrap()).unwrap();
     println!("PDF written to: {}", pdf_path.display());
 
@@ -37,7 +45,7 @@ fn test_render_pdf() {
 
     // Parse PDF and check for font
     let file = pdf::file::FileOptions::cached().open(&pdf_path).unwrap();
-    let mut found_arial = false;
+    let mut found_libertine = false;
 
     // Check each page's resources for fonts
     if let Ok(page) = file.get_page(0) {
@@ -45,8 +53,8 @@ fn test_render_pdf() {
             for (_, font_ref) in resources.fonts.iter() {
                 if let Ok(font) = font_ref.load(&file.resolver()) {
                     if let Some(name) = &font.name {
-                        if name.to_string().to_lowercase().contains("arial") {
-                            found_arial = true;
+                        if name.to_string().to_lowercase().contains("libertine") {
+                            found_libertine = true;
                             break;
                         }
                     }
@@ -55,5 +63,5 @@ fn test_render_pdf() {
         }
     }
 
-    assert!(found_arial, "PDF should contain Arial font");
+    assert!(found_libertine, "PDF should contain the Linux Libertine font");
 }
