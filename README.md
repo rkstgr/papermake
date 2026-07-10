@@ -114,6 +114,26 @@ if result.success {
 }
 ```
 
+### PDF/A output
+
+Pass `RenderOptions` to control the PDF standard of the output — e.g. PDF/A-3b,
+the archivable profile that permits arbitrary embedded files and serves as the
+base for ZUGFeRD/Factur-X e-invoices:
+
+```rust
+use papermake::{render_template_with_options, RenderOptions};
+
+let result = render_template_with_options(template.to_string(), fs, &data, &RenderOptions::pdf_a3b())?;
+```
+
+Over HTTP, request it per render:
+
+```bash
+curl -X POST localhost:3000/api/render/invoice:latest \
+  -H "Content-Type: application/json" \
+  -d '{"data": {"company": "Acme Corp"}, "pdf_standard": "a-3b"}'
+```
+
 ### Images & other files
 
 Rendering happens against a **virtual file system** — there is no disk access and no
@@ -158,7 +178,7 @@ All routes except `/health` are prefixed with `/api`.
 | `GET` | `/api/templates` | List templates (`limit`, `offset`, `search`) |
 | `GET` | `/api/templates/{name}/tags` | List a template's tags |
 | `GET` | `/api/templates/{reference}` | Get template metadata |
-| `POST` | `/api/render/{reference}` | Render to PDF, body `{"data": {...}}` — returns `render_id` |
+| `POST` | `/api/render/{reference}` | Render to PDF, body `{"data": {...}, "pdf_standard": "a-3b"}` (`pdf_standard` optional: `1.7`, `a-2b`, `a-3b`) — returns `render_id` |
 | `GET` | `/api/renders` | Recent render history (`limit`, `offset`) |
 | `GET` | `/api/renders/{render_id}/pdf` | Download a rendered PDF |
 

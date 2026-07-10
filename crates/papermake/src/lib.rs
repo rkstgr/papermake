@@ -9,7 +9,10 @@ pub use error::{
     PapermakeError, Result, SourceLocation, TemplateError, compilation_error_from_diagnostics,
     convert_typst_diagnostic, template_missing_file,
 };
-pub use render::{RenderError, RenderResult, render_template, render_template_with_cache};
+pub use render::{
+    PdfStandard, RenderError, RenderOptions, RenderResult, render_template,
+    render_template_with_cache, render_template_with_options,
+};
 pub use typst::{InMemoryFileSystem, PapermakeWorld, RenderFileSystem};
 
 // Re-export typst types needed by papermake-registry
