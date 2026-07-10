@@ -19,6 +19,9 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Deserialize)]
 pub struct RenderRequest {
     pub data: serde_json::Value,
+    /// Optional PDF standard to enforce: "1.7" (default), "a-2b", or "a-3b"
+    #[serde(default)]
+    pub pdf_standard: Option<papermake::PdfStandard>,
 }
 
 #[derive(Debug, Serialize)]
@@ -34,9 +37,13 @@ pub async fn render_template(
     Path(reference): Path<String>,
     Json(request): Json<RenderRequest>,
 ) -> ApiResult<Json<ApiResponse<RenderResponse>>> {
+    let options = papermake::RenderOptions {
+        pdf_standards: request.pdf_standard.into_iter().collect(),
+    };
+
     let result = state
         .registry
-        .render_and_store(&reference, &request.data)
+        .render_and_store_with_options(&reference, &request.data, &options)
         .await
         .map_err(|e| ApiError::RenderFailed(e.to_string()))?;
 

@@ -59,7 +59,9 @@ pub mod storage;
 pub use bundle::TemplateInfo;
 pub use error::RegistryError;
 pub use registry::Registry;
-pub use render_storage::{RenderStorage, RenderRecord, AnalyticsQuery, AnalyticsResult};
+// Re-export render option types so downstream crates don't need a direct papermake dependency
+pub use papermake::{PdfStandard, RenderOptions};
+pub use render_storage::{AnalyticsQuery, AnalyticsResult, RenderRecord, RenderStorage};
 pub use storage::{BlobStorage, TypstFileSystem};
 
 #[cfg(feature = "s3")]

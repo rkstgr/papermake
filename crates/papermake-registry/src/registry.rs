@@ -1,4 +1,4 @@
-use papermake::InMemoryFileSystem;
+use papermake::{InMemoryFileSystem, RenderOptions};
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -251,6 +251,37 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
         reference: &str,
         data: &serde_json::Value,
     ) -> Result<Vec<u8>, RegistryError> {
+        self.render_with_options(reference, data, &RenderOptions::default())
+            .await
+    }
+
+    /// Render a template to PDF with explicit export options
+    ///
+    /// Behaves like [`Registry::render`], but lets the caller control PDF
+    /// export — e.g. requesting PDF/A-3b conformant output for archival or
+    /// e-invoice (ZUGFeRD/Factur-X) use cases:
+    ///
+    /// ```rust,no_run
+    /// # use papermake_registry::Registry;
+    /// # use papermake_registry::storage::blob_storage::MemoryStorage;
+    /// # use papermake::RenderOptions;
+    /// # use serde_json::json;
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let registry = Registry::new_storage_only(MemoryStorage::new());
+    /// let pdf_bytes = registry.render_with_options(
+    ///     "john/invoice:latest",
+    ///     &json!({ "customer_name": "Acme Corp" }),
+    ///     &RenderOptions::pdf_a3b(),
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn render_with_options(
+        &self,
+        reference: &str,
+        data: &serde_json::Value,
+        options: &RenderOptions,
+    ) -> Result<Vec<u8>, RegistryError> {
         // Step 1: Resolve the template reference to get manifest hash
         let manifest_hash = self.resolve(reference).await?;
 
@@ -305,9 +336,13 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
         }
 
         // Step 5: Render the template using papermake
-        let render_result =
-            papermake::render_template(entrypoint_content, Arc::new(file_system), data)
-                .map_err(RegistryError::Compilation)?;
+        let render_result = papermake::render_template_with_options(
+            entrypoint_content,
+            Arc::new(file_system),
+            data,
+            options,
+        )
+        .map_err(RegistryError::Compilation)?;
 
         // Check if rendering was successful
         if render_result.success {
@@ -558,6 +593,21 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
         reference: &str,
         data: &serde_json::Value,
     ) -> Result<RenderResult, RegistryError> {
+        self.render_and_store_with_options(reference, data, &RenderOptions::default())
+            .await
+    }
+
+    /// Render a template with tracking, using explicit export options
+    ///
+    /// Behaves like [`Registry::render_and_store`], but lets the caller
+    /// control PDF export (e.g. PDF/A-3b conformance). See
+    /// [`Registry::render_with_options`].
+    pub async fn render_and_store_with_options(
+        &self,
+        reference: &str,
+        data: &serde_json::Value,
+        options: &RenderOptions,
+    ) -> Result<RenderResult, RegistryError> {
         // Step 1: Parse template reference to extract name/tag
         let parsed_ref = Reference::parse(reference)?;
         let template_name = parsed_ref.full_name();
@@ -580,7 +630,7 @@ impl<S: BlobStorage + 'static, R: RenderStorage + 'static> Registry<S, R> {
         // Step 4: Try to resolve and render - catch all failures
         let result: Result<(String, Vec<u8>), RegistryError> = async {
             let manifest_hash = self.resolve(reference).await?;
-            let pdf_bytes = self.render(reference, data).await?;
+            let pdf_bytes = self.render_with_options(reference, data, options).await?;
             Ok((manifest_hash, pdf_bytes))
         }
         .await;
@@ -1150,6 +1200,33 @@ Hello #data.name"#
         assert!(!pdf_bytes.is_empty());
         // PDF should start with PDF header
         assert!(pdf_bytes.starts_with(b"%PDF"));
+    }
+
+    #[tokio::test]
+    async fn test_registry_render_with_pdf_a3b() {
+        let storage = MemoryStorage::new();
+        let registry = Registry::new_storage_only(storage);
+        let bundle = create_test_bundle();
+
+        registry
+            .publish(bundle, "john/invoice", "latest")
+            .await
+            .unwrap();
+
+        let data = serde_json::json!({ "name": "Test Customer" });
+
+        let pdf_bytes = registry
+            .render_with_options("john/invoice:latest", &data, &RenderOptions::pdf_a3b())
+            .await
+            .unwrap();
+
+        assert!(pdf_bytes.starts_with(b"%PDF"));
+        // PDF/A conformance is declared in the XMP metadata
+        assert!(
+            pdf_bytes
+                .windows(b"pdfaid".len())
+                .any(|w| w == b"pdfaid".as_slice())
+        );
     }
 
     #[tokio::test]
