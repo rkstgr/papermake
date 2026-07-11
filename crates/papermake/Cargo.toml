@@ -1,6 +1,6 @@
 [package]
 name = "papermake"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Fast PDF generation library using Typst with a virtual file system for templates, images, and fonts"
 license = "Apache-2.0"
