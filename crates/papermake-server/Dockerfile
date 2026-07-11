@@ -1,4 +1,5 @@
-ARG RUST_VERSION=1.86.0
+# 1.89+ required by locked deps (time 0.3.53, enum-ordinalize 4.4.1, …)
+ARG RUST_VERSION=1.89.0
 ARG PACKAGE_NAME=papermake-server
 FROM rust:${RUST_VERSION}-slim AS build
 
@@ -23,10 +24,13 @@ RUN --mount=type=bind,source=Cargo.toml,target=Cargo.toml \
 FROM debian:bookworm-slim AS final
 ARG UID=10001
 
-# Install runtime dependencies
+# Runtime dependencies. curl is for container healthchecks (GET /health) —
+# without it, orchestrators running a curl-based check report the container
+# unhealthy indefinitely while it serves fine.
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 RUN adduser \
@@ -38,10 +42,20 @@ RUN adduser \
     --uid "${UID}" \
     appuser
 
+# Bundle the repo fonts: rendering fails without fonts, and image consumers
+# have no repo checkout to bind-mount them from.
+COPY fonts /fonts
+
+ENV FONTS_DIR=/fonts \
+    HOST=0.0.0.0 \
+    PORT=3000
+
 USER appuser
 
 # Copy the executable from the "build" stage.
 COPY --from=build /bin/server /bin/
+
+EXPOSE 3000
 
 # What the container should run when it is started.
 CMD ["/bin/server"]
